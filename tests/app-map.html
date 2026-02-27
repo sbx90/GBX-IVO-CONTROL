@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GBX-IVO-CONTROL — App Map</title>
+<style>
+  :root {
+    --bg: #09090b;
+    --surface: #18181b;
+    --surface2: #27272a;
+    --border: #3f3f46;
+    --text: #f4f4f5;
+    --muted: #71717a;
+    --purple: #7c6aff;
+    --green: #15803d;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --blue: #3b82f6;
+    --teal: #14b8a6;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; font-size: 14px; line-height: 1.5; }
+  h1 { font-size: 1.5rem; font-weight: 700; color: var(--green); letter-spacing: -0.02em; }
+  h2 { font-size: 1rem; font-weight: 600; color: var(--text); margin-bottom: 12px; }
+  h3 { font-size: 0.8rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+
+  .header { padding: 24px 32px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px; }
+  .header-sub { color: var(--muted); font-size: 0.85rem; }
+  .badge { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 9999px; font-size: 0.7rem; font-weight: 600; }
+
+  .main { display: grid; grid-template-columns: 260px 1fr; height: calc(100vh - 73px); }
+  .nav { border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; }
+  .nav-item { display: flex; align-items: center; gap-8px; padding: 8px 12px; border-radius: 8px; cursor: pointer; color: var(--muted); font-size: 0.85rem; gap: 8px; transition: all 0.15s; }
+  .nav-item:hover, .nav-item.active { background: rgba(124,106,255,0.12); color: var(--purple); }
+  .nav-item .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+
+  .content { overflow-y: auto; padding: 24px 32px; }
+  .section { display: none; }
+  .section.visible { display: block; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+  .card-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; }
+
+  .route-pill { display: inline-flex; align-items: center; gap: 6px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; font-family: monospace; font-size: 0.78rem; color: var(--purple); margin-bottom: 12px; }
+
+  .tag { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: 500; margin: 2px; }
+  .tag-component { background: rgba(124,106,255,0.12); color: var(--purple); }
+  .tag-hook { background: rgba(20,184,166,0.12); color: var(--teal); }
+  .tag-db { background: rgba(59,130,246,0.12); color: var(--blue); }
+  .tag-feature { background: rgba(245,158,11,0.12); color: var(--amber); }
+
+  .db-table { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+  .db-table-header { padding: 8px 12px; background: rgba(124,106,255,0.1); border-bottom: 1px solid var(--border); font-size: 0.8rem; font-weight: 700; color: var(--purple); display: flex; align-items: center; justify-content: space-between; }
+  .db-field { padding: 5px 12px; font-size: 0.75rem; display: flex; gap: 12px; border-bottom: 1px solid rgba(63,63,70,0.4); }
+  .db-field:last-child { border-bottom: none; }
+  .db-field-name { color: var(--text); font-family: monospace; min-width: 180px; }
+  .db-field-type { color: var(--muted); font-family: monospace; }
+  .pk { color: var(--amber); font-size: 0.65rem; font-weight: 700; background: rgba(245,158,11,0.1); padding: 1px 5px; border-radius: 3px; }
+  .fk { color: var(--blue); font-size: 0.65rem; font-weight: 700; background: rgba(59,130,246,0.1); padding: 1px 5px; border-radius: 3px; }
+  .auto { color: var(--teal); font-size: 0.65rem; font-weight: 700; background: rgba(20,184,166,0.1); padding: 1px 5px; border-radius: 3px; }
+
+  .flow-step { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-bottom: 1px solid rgba(63,63,70,0.4); }
+  .flow-step:last-child { border-bottom: none; }
+  .flow-num { width: 24px; height: 24px; border-radius: 50%; background: var(--purple); color: white; font-size: 0.7rem; font-weight: 700; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .flow-content { flex: 1; }
+  .flow-title { font-size: 0.82rem; font-weight: 600; }
+  .flow-desc { font-size: 0.75rem; color: var(--muted); margin-top: 2px; }
+
+  .enum-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .enum-label { font-size: 0.75rem; color: var(--muted); width: 100%; margin-bottom: 4px; font-weight: 600; }
+  .enum-val { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-family: monospace; font-size: 0.72rem; color: var(--text); }
+  .enum-val.danger { border-color: rgba(239,68,68,0.4); color: #fca5a5; background: rgba(239,68,68,0.08); }
+  .enum-val.ok { border-color: rgba(34,197,94,0.4); color: #86efac; background: rgba(34,197,94,0.08); }
+
+  .connector { display: flex; align-items: center; gap: 8px; font-size: 0.75rem; color: var(--muted); padding: 4px 0; }
+  .connector-arrow { color: var(--border); }
+  .connector-from { color: var(--purple); font-family: monospace; }
+  .connector-to { color: var(--blue); font-family: monospace; }
+
+  .file-list { list-style: none; }
+  .file-list li { padding: 4px 0; font-family: monospace; font-size: 0.75rem; color: var(--muted); border-bottom: 1px solid rgba(63,63,70,0.3); display: flex; align-items: center; gap: 8px; }
+  .file-list li:last-child { border-bottom: none; }
+  .file-list li::before { content: ''; display: block; width: 6px; height: 6px; border-radius: 50%; background: var(--border); flex-shrink: 0; }
+
+  .warning-box { background: rgba(245,158,11,0.08); border: 1px solid rgba(245,158,11,0.25); border-radius: 8px; padding: 10px 14px; font-size: 0.78rem; color: #fcd34d; margin-top: 8px; }
+
+  .separator { height: 1px; background: var(--border); margin: 20px 0; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>GBX-IVO-CONTROL</h1>
+    <div class="header-sub">Application Map &nbsp;·&nbsp; Next.js 16 · Supabase · TailwindCSS v4 · React Query</div>
+  </div>
+  <div style="margin-left:auto;display:flex;gap:8px;">
+    <span class="badge" style="background:rgba(21,128,61,0.15);color:#4ade80;">● Live at gbx-ivo-control.vercel.app</span>
+    <span class="badge" style="background:rgba(124,106,255,0.15);color:#a78bfa;">localhost:3003</span>
+  </div>
+</div>
+
+<div class="main">
+  <!-- Nav -->
+  <nav class="nav">
+    <h3 style="padding:0 12px;margin-bottom:12px;">Sections</h3>
+    <div class="nav-item active" onclick="show('routes')" id="nav-routes"><span class="dot" style="background:#7c6aff;"></span> Routes & Pages</div>
+    <div class="nav-item" onclick="show('db')" id="nav-db"><span class="dot" style="background:#3b82f6;"></span> Database Schema</div>
+    <div class="nav-item" onclick="show('components')" id="nav-components"><span class="dot" style="background:#14b8a6;"></span> Components</div>
+    <div class="nav-item" onclick="show('hooks')" id="nav-hooks"><span class="dot" style="background:#f59e0b;"></span> Data Hooks</div>
+    <div class="nav-item" onclick="show('flows')" id="nav-flows"><span class="dot" style="background:#ef4444;"></span> Business Flows</div>
+    <div class="nav-item" onclick="show('enums')" id="nav-enums"><span class="dot" style="background:#8b5cf6;"></span> Enums & Config</div>
+    <div class="nav-item" onclick="show('tests')" id="nav-tests"><span class="dot" style="background:#22c55e;"></span> Tests</div>
+  </nav>
+
+  <!-- Content -->
+  <div class="content">
+
+    <!-- ROUTES -->
+    <div id="section-routes" class="section visible">
+      <h2>Routes & Pages</h2>
+
+      <div class="card">
+        <div class="card-title">🔐 Auth (no sidebar)</div>
+        <div class="route-pill">📄 /login</div>
+        <div>
+          <span class="tag tag-feature">Email + Password login</span>
+          <span class="tag tag-feature">Zod validation</span>
+          <span class="tag tag-feature">Redirect → / on success</span>
+          <span class="tag tag-component">supabase.auth.signInWithPassword</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📊 Dashboard <span style="color:var(--muted);font-weight:400;font-size:0.8rem;">/</span></div>
+        <div class="route-pill">📄 /</div>
+        <div>
+          <span class="tag tag-component">StatsCards</span>
+          <span class="tag tag-component">RecentTickets</span>
+          <span class="tag tag-component">ProductionSummary</span>
+          <span class="tag tag-feature">Total Kits</span>
+          <span class="tag tag-feature">Kits OK</span>
+          <span class="tag tag-feature">Open Tickets</span>
+          <span class="tag tag-feature">Dead Kits</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📦 Stock</div>
+        <div class="route-pill">📄 /stock</div>
+        <p style="font-size:0.78rem;color:var(--muted);margin-bottom:10px;">Client component — search + type/status filters</p>
+        <div>
+          <span class="tag tag-component">KitTable</span>
+          <span class="tag tag-component">KitForm (dialog)</span>
+          <span class="tag tag-hook">useKits(filters)</span>
+          <span class="tag tag-feature">Search by serial</span>
+          <span class="tag tag-feature">Filter by type/status</span>
+          <span class="tag tag-feature">Add Kit dialog</span>
+        </div>
+        <div class="separator"></div>
+        <div class="route-pill">📄 /stock/[id]</div>
+        <p style="font-size:0.78rem;color:var(--muted);margin-bottom:10px;">Server fetch + client sub-components. Tabs: Components | Board Map | Tickets</p>
+        <div>
+          <span class="tag tag-component">KitDetailHeader</span>
+          <span class="tag tag-component">ComponentGrid</span>
+          <span class="tag tag-component">ComponentCard (×9)</span>
+          <span class="tag tag-component">MainboardMap</span>
+          <span class="tag tag-component">TicketTable</span>
+          <span class="tag tag-hook">useKit(id)</span>
+          <span class="tag tag-feature">Status select</span>
+          <span class="tag tag-feature">Component status edit</span>
+          <span class="tag tag-feature">Board section status edit</span>
+          <span class="tag tag-feature">POWER_2 danger pulse ⚡</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🎫 Tickets</div>
+        <div class="route-pill">📄 /tickets</div>
+        <p style="font-size:0.78rem;color:var(--muted);margin-bottom:10px;">Client component — search + status/priority/category filters</p>
+        <div>
+          <span class="tag tag-component">TicketTable</span>
+          <span class="tag tag-component">TicketForm (dialog)</span>
+          <span class="tag tag-hook">useTickets(filters)</span>
+          <span class="tag tag-feature">Search by title</span>
+          <span class="tag tag-feature">Filter status/priority/category</span>
+          <span class="tag tag-feature">Client selector</span>
+          <span class="tag tag-feature">POWER warning alert</span>
+          <span class="tag tag-feature">Kit auto → TICKET status</span>
+        </div>
+        <div class="separator"></div>
+        <div class="route-pill">📄 /tickets/[id]</div>
+        <p style="font-size:0.78rem;color:var(--muted);margin-bottom:10px;">2/3 + 1/3 grid layout</p>
+        <div>
+          <span class="tag tag-component">TicketDetailHeader</span>
+          <span class="tag tag-component">KnownIssuesSuggest</span>
+          <span class="tag tag-component">AttachmentGallery</span>
+          <span class="tag tag-component">CommentThread</span>
+          <span class="tag tag-component">CommentForm</span>
+          <span class="tag tag-component">AttachmentUpload</span>
+          <span class="tag tag-hook">useTicket(id)</span>
+          <span class="tag tag-hook">useKnownIssues()</span>
+          <span class="tag tag-feature">Status select</span>
+          <span class="tag tag-feature">Image lightbox</span>
+          <span class="tag tag-feature">File upload (Supabase Storage)</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">🏭 Production</div>
+        <div class="route-pill">📄 /production</div>
+        <p style="font-size:0.78rem;color:var(--muted);margin-bottom:10px;">Client component — Table / Board view toggle</p>
+        <div>
+          <span class="tag tag-component">OrderTable</span>
+          <span class="tag tag-component">OrderKanban</span>
+          <span class="tag tag-component">OrderForm (dialog)</span>
+          <span class="tag tag-hook">useProductionOrders(filters)</span>
+          <span class="tag tag-feature">Table/Board toggle</span>
+          <span class="tag tag-feature">Status filter</span>
+          <span class="tag tag-feature">Progress bar</span>
+        </div>
+        <div class="separator"></div>
+        <div class="route-pill">📄 /production/[id]</div>
+        <div>
+          <span class="tag tag-component">StepPipeline</span>
+          <span class="tag tag-component">StepCard (×10)</span>
+          <span class="tag tag-hook">useProductionOrder(id)</span>
+          <span class="tag tag-hook">useUpdateStep()</span>
+          <span class="tag tag-feature">Start / Complete / Skip steps</span>
+          <span class="tag tag-feature">Step 10 done → order COMPLETE</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">⚙️ API Routes</div>
+        <div class="route-pill">🔌 POST /api/deploy</div>
+        <p style="font-size:0.78rem;color:var(--muted);">Triggers Vercel redeploy via API. Uses VERCEL_TOKEN + VERCEL_PROJECT_ID + VERCEL_TEAM_ID env vars.</p>
+      </div>
+    </div>
+
+    <!-- DATABASE -->
+    <div id="section-db" class="section">
+      <h2>Database Schema (Supabase / PostgreSQL)</h2>
+      <p style="color:var(--muted);font-size:0.8rem;margin-bottom:20px;">All tables have RLS enabled with "authenticated full access" policy.</p>
+
+      <div class="grid-2">
+        <div>
+          <div class="db-table">
+            <div class="db-table-header">kits <span style="font-size:0.7rem;font-weight:400;color:var(--muted);">→ kit_components (auto)</span></div>
+            <div class="db-field"><span class="db-field-name">id</span><span class="db-field-type">uuid</span><span class="pk">PK</span></div>
+            <div class="db-field"><span class="db-field-name">serial_number</span><span class="db-field-type">text NOT NULL UNIQUE</span></div>
+            <div class="db-field"><span class="db-field-name">type</span><span class="db-field-type">kit_type enum</span></div>
+            <div class="db-field"><span class="db-field-name">status</span><span class="db-field-type">kit_status enum</span></div>
+            <div class="db-field"><span class="db-field-name">notes</span><span class="db-field-type">text</span></div>
+            <div class="db-field"><span class="db-field-name">created_by</span><span class="db-field-type">uuid</span><span class="fk">FK auth.users</span></div>
+            <div class="db-field"><span class="db-field-name">created_at / updated_at</span><span class="db-field-type">timestamptz</span><span class="auto">AUTO</span></div>
+          </div>
+
+          <div class="db-table">
+            <div class="db-table-header">kit_components <span style="font-size:0.7rem;font-weight:400;color:var(--muted);">→ mainboard_sections (auto if MAIN_BOARD)</span></div>
+            <div class="db-field"><span class="db-field-name">id</span><span class="db-field-type">uuid</span><span class="pk">PK</span></div>
+            <div class="db-field"><span class="db-field-name">kit_id</span><span class="db-field-type">uuid</span><span class="fk">FK kits</span></div>
+            <div class="db-field"><span class="db-field-name">component_type</span><span class="db-field-type">component_type enum</span></div>
+            <div class="db-field"><span class="db-field-name">status</span><span class="db-field-type">component_status enum</span></div>
+            <div class="db-field"><span class="db-field-name">fault_category</span><span class="db-field-type">issue_category enum</span></div>
+            <div class="db-field"><span class="db-field-name">serial_number, notes</span><span class="db-field-type">text</span></div>
+          </div>
+
+          <div class="db-table">
+            <div class="db-table-header">mainboard_sections</div>
+            <div class="db-field"><span class="db-field-name">id</span><span class="db-field-type">uuid</span><span class="pk">PK</span></div>
+            <div class="db-field"><span class="db-field-name">component_id</span><span class="db-field-type">uuid</span><span class="fk">FK kit_components</span></div>
+            <div class="db-field"><span class="db-field-name">section_name</span><span class="db-field-type">mainboard_section enum</span></div>
+            <div class="db-field"><span class="db-field-name">status</span><span class="db-field-type">component_status enum</span></div>
+            <div class="db-field"><span class="db-field-name">issue_category, notes</span><span class="db-field-type">text / enum</span></div>
+          </div>
+
+          <div class="db-table">
+            <div class="db-table-header">clients</div>
+            <div class="db-field"><span class="db-field-name">id</span><span class="db-field-type">uuid</span><span class="pk">PK</span></div>
+            <div class="db-field"><span class="db-field-name">name</span><span class="db-field-type">text NOT NULL</span></div>
+            <div class="db-field"><span class="db-field-name">email, phone, notes</span><span class="db-field-type">text</span></div>
+            <div class="db-field"><span class="db-field-name">created_at / updated_at</span><span class="db-field-type">timestamptz</span><span class="auto">AUTO</span></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="db-table">
+            <div class="db-table-header">tickets</div>
+            <div class="db-field"><span class="db-field-name">id</span><span class="db-field-type">uuid</span><span class="pk">PK</span></div>
+            <div class="db-field"><span class="db-field-name">ticket_number</span><span class="db-field-type">serial</span><span class="auto">AUTO</span></div>
+            <div class="db-field"><span class="db-field-name">kit_id</span><span class="db-field-type">uuid</span><span class="fk">FK kits</span></div>
+            <div class="db-field"><span class="db-field-name">client_id</span><span class="db-field-type">uuid</span><span class="fk">FK clients</span></div>
+            <div class="db-field"><span class="db-field-name">component_id</span><span class="db-field-type">uuid</span><span class="fk">FK kit_components</span></div>
+            <div class="db-field"><span class="db-field-name">mainboard_section_id</span><span class="db-field-type">uuid</span><span class="fk">FK mainboard_sections</span></div>
+            <div class="db-field"><span class="db-field-name">title, description</span><span class="db-field-type">text</span></div>
+            <div class="db-field"><span class="db-field-name">priority</span><span class="db-field-type">ticket_priority enum</span></div>
+            <div class="db-field"><span class="db-field-name">status</span><span class="db-field-type">ticket_status enum</span></div>
+            <div class="db-field"><span class="db-field-name">issue_category</span><span class="db-field-type">issue_category enum</span></div>
+            <div class="db-field"><span class="db-field-name">assigned_to, created_by</span><span class="db-field-type">uuid</span></div>
+            <div class="db-field"><span class="db-field-name">resolved_at</span><span class="db-field-type">timestamptz</span></div>
+          </div>
+
+          <div class="db-table">
+            <div class="db-table-header">ticket_comments</div>
+            <div class="db-field"><span class="db-field-name">id</span><span class="db-field-type">uuid</span><span class="pk">PK</span></div>
+            <div class="db-field"><span class="db-field-name">ticket_id</span><span class="db-field-type">uuid</span><span class="fk">FK tickets</span></div>
+            <div class="db-field"><span class="db-field-name">author_id</span><span class="db-field-type">uuid</span><span class="fk">FK auth.users</span></div>
+            <div class="db-field"><span class="db-field-name">content</span><span class="db-field-type">text NOT NULL</span></div>
+          </div>
+
+          <div class="db-table">
+            <div class="db-table-header">ticket_attachments</div>
+            <div class="db-field"><span class="db-field-name">id</span><span class="db-field-type">uuid</span><span class="pk">PK</span></div>
+            <div class="db-field"><span class="db-field-name">ticket_id</span><span class="db-field-type">uuid</span><span class="fk">FK tickets</span></div>
+            <div class="db-field"><span class="db-field-name">comment_id</span><span class="db-field-type">uuid</span><span class="fk">FK ticket_comments</span></div>
+            <div class="db-field"><span class="db-field-name">file_url, file_name, file_type</span><span class="db-field-type">text</span></div>
+            <div class="db-field"><span class="db-field-name">uploaded_by</span><span class="db-field-type">uuid</span></div>
+          </div>
+
+          <div class="db-table">
+            <div class="db-table-header">production_orders <span style="font-size:0.7rem;font-weight:400;color:var(--muted);">→ 10 steps (auto)</span></div>
+            <div class="db-field"><span class="db-field-name">id</span><span class="db-field-type">uuid</span><span class="pk">PK</span></div>
+            <div class="db-field"><span class="db-field-name">order_number</span><span class="db-field-type">text NOT NULL UNIQUE</span></div>
+            <div class="db-field"><span class="db-field-name">quantity</span><span class="db-field-type">integer</span></div>
+            <div class="db-field"><span class="db-field-name">status</span><span class="db-field-type">production_status enum</span></div>
+            <div class="db-field"><span class="db-field-name">current_step</span><span class="db-field-type">integer</span></div>
+            <div class="db-field"><span class="db-field-name">target_date, notes</span><span class="db-field-type">date / text</span></div>
+          </div>
+
+          <div class="db-table">
+            <div class="db-table-header">production_steps</div>
+            <div class="db-field"><span class="db-field-name">id</span><span class="db-field-type">uuid</span><span class="pk">PK</span></div>
+            <div class="db-field"><span class="db-field-name">order_id</span><span class="db-field-type">uuid</span><span class="fk">FK production_orders</span></div>
+            <div class="db-field"><span class="db-field-name">step_number, step_name</span><span class="db-field-type">int / text</span></div>
+            <div class="db-field"><span class="db-field-name">status</span><span class="db-field-type">production_step_status enum</span></div>
+            <div class="db-field"><span class="db-field-name">started_at, completed_at</span><span class="db-field-type">timestamptz</span></div>
+            <div class="db-field"><span class="db-field-name">completed_by, notes</span><span class="db-field-type">uuid / text</span></div>
+          </div>
+
+          <div class="db-table">
+            <div class="db-table-header">known_issues <span style="font-size:0.7rem;font-weight:400;color:var(--muted);">read-only reference</span></div>
+            <div class="db-field"><span class="db-field-name">title, description, solution</span><span class="db-field-type">text</span></div>
+            <div class="db-field"><span class="db-field-name">issue_category</span><span class="db-field-type">issue_category enum</span></div>
+            <div class="db-field"><span class="db-field-name">board_section</span><span class="db-field-type">mainboard_section enum</span></div>
+            <div class="db-field"><span class="db-field-name">frequency</span><span class="db-field-type">LOW | MEDIUM | HIGH</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:8px;">
+        <div class="card-title">🔁 DB Triggers (auto-created)</div>
+        <div class="connector"><span class="connector-from">INSERT kits</span><span class="connector-arrow">→</span><span class="connector-to">auto_create_kit_components()</span><span>creates 9 component rows</span></div>
+        <div class="connector"><span class="connector-from">INSERT kit_components WHERE type=MAIN_BOARD</span><span class="connector-arrow">→</span><span class="connector-to">auto_create_mainboard_sections()</span><span>creates 13 section rows</span></div>
+        <div class="connector"><span class="connector-from">INSERT production_orders</span><span class="connector-arrow">→</span><span class="connector-to">auto_create_production_steps()</span><span>creates 10 step rows</span></div>
+        <div class="connector"><span class="connector-from">UPDATE any table</span><span class="connector-arrow">→</span><span class="connector-to">update_updated_at_column()</span><span>timestamps auto-updated</span></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">📁 Storage Bucket</div>
+        <p style="font-size:0.8rem;color:var(--muted);">Bucket: <code style="color:var(--purple);">ticket-attachments</code> (public) — upload / read / delete policies for authenticated users</p>
+      </div>
+    </div>
+
+    <!-- COMPONENTS -->
+    <div id="section-components" class="section">
+      <h2>Component Tree</h2>
+
+      <div class="grid-2">
+        <div>
+          <div class="card">
+            <div class="card-title">🏗️ Layout</div>
+            <ul class="file-list">
+              <li>providers.tsx — QueryClient + ThemeProvider + AuthErrorHandler + Toaster</li>
+              <li>sidebar.tsx — fixed left nav, realtime ticket badge, sign-out</li>
+              <li>header.tsx — top bar with page title</li>
+              <li>settings-dialog.tsx — full Dialog: Appearance + Clients tabs</li>
+              <li>deploy-button.tsx — triggers POST /api/deploy, shows state</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📊 Dashboard</div>
+            <ul class="file-list">
+              <li>stats-cards.tsx — 4 KPI cards (server-fetched)</li>
+              <li>recent-tickets.tsx — last 5 tickets with priority badge</li>
+              <li>production-summary.tsx — active orders with progress bars</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">📦 Stock</div>
+            <ul class="file-list">
+              <li>kit-table.tsx — sortable table, serial link, badges, ticket count</li>
+              <li>kit-form.tsx — Dialog: serial, type, notes. Zod validated</li>
+              <li>kit-detail-header.tsx — serial, badges, status Select, New Ticket btn</li>
+              <li>component-grid.tsx — 3×3 grid using COMPONENT_ORDER</li>
+              <li>component-card.tsx — icon, status badge, click → Sheet edit</li>
+              <li>mainboard-map.tsx — CSS grid from MAINBOARD_LAYOUT, POWER_2 danger-pulse</li>
+            </ul>
+          </div>
+        </div>
+
+        <div>
+          <div class="card">
+            <div class="card-title">🎫 Tickets</div>
+            <ul class="file-list">
+              <li>ticket-table.tsx — #, title, kit serial, category, priority, status</li>
+              <li>ticket-form.tsx — Kit combobox, Client select, category, priority, component, section</li>
+              <li>ticket-detail-header.tsx — #, title, badges, status Select, kit link</li>
+              <li>known-issues-suggest.tsx — Accordion, matches by category/section</li>
+              <li>attachment-gallery.tsx — grid thumbnails + Dialog lightbox</li>
+              <li>attachment-upload.tsx — react-dropzone → Supabase Storage</li>
+              <li>comment-thread.tsx — timeline with avatar, timestamp, content</li>
+              <li>comment-form.tsx — textarea + optional file upload</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">🏭 Production</div>
+            <ul class="file-list">
+              <li>order-table.tsx — order#, qty, status, progress bar, target date</li>
+              <li>order-kanban.tsx — 3 columns: QUEUED / ACTIVE / COMPLETE</li>
+              <li>order-form.tsx — Dialog: order#, qty, target date (Calendar), notes</li>
+              <li>step-pipeline.tsx — vertical timeline of 10 StepCards</li>
+              <li>step-card.tsx — number circle, name, timestamps, Start/Complete/Skip</li>
+            </ul>
+          </div>
+
+          <div class="card">
+            <div class="card-title">🎨 UI Primitives (shadcn/ui)</div>
+            <ul class="file-list">
+              <li>button, input, label, textarea, select, badge</li>
+              <li>dialog, sheet, popover, command, dropdown-menu</li>
+              <li>card, table, tabs, separator, accordion</li>
+              <li>calendar, progress, skeleton, tooltip, avatar</li>
+              <li>sonner (toasts), empty-state (custom)</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HOOKS -->
+    <div id="section-hooks" class="section">
+      <h2>Data Hooks (TanStack React Query)</h2>
+      <p style="color:var(--muted);font-size:0.8rem;margin-bottom:20px;">All hooks use Supabase client. staleTime: 60s · gcTime: 5min · retry: 1</p>
+
+      <div class="grid-2">
+        <div>
+          <div class="card">
+            <div class="card-title">🔑 use-kits.ts</div>
+            <div class="flow-step"><div class="flow-num">Q</div><div class="flow-content"><div class="flow-title">useKits(filters?)</div><div class="flow-desc">List kits with ticket count. Filters: type, status, search</div></div></div>
+            <div class="flow-step"><div class="flow-num">Q</div><div class="flow-content"><div class="flow-title">useKit(id)</div><div class="flow-desc">Single kit with components + sections + tickets</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useCreateKit()</div><div class="flow-desc">INSERT kit → triggers 9 components auto-created</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useUpdateKit()</div><div class="flow-desc">UPDATE kit status/notes</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useUpdateKitComponent()</div><div class="flow-desc">UPDATE component status/notes</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useUpdateMainboardSection()</div><div class="flow-desc">UPDATE mainboard section status/notes</div></div></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">🎫 use-tickets.ts</div>
+            <div class="flow-step"><div class="flow-num">Q</div><div class="flow-content"><div class="flow-title">useTickets(filters?)</div><div class="flow-desc">List tickets with kit join. Filters: status, priority, category, search</div></div></div>
+            <div class="flow-step"><div class="flow-num">Q</div><div class="flow-content"><div class="flow-title">useTicket(id)</div><div class="flow-desc">Full ticket with kit, components, sections, comments, attachments</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useCreateTicket()</div><div class="flow-desc">INSERT ticket → if kit.status=OK, auto-sets kit to TICKET</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useUpdateTicket()</div><div class="flow-desc">UPDATE status/priority/assigned_to. Sets resolved_at when RESOLVED</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useAddComment()</div><div class="flow-desc">INSERT comment with author_id</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useAddAttachment()</div><div class="flow-desc">Upload to Supabase Storage + INSERT attachment record</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useDeleteAttachment()</div><div class="flow-desc">DELETE from Storage + DELETE record</div></div></div>
+          </div>
+        </div>
+
+        <div>
+          <div class="card">
+            <div class="card-title">🏭 use-production.ts</div>
+            <div class="flow-step"><div class="flow-num">Q</div><div class="flow-content"><div class="flow-title">useProductionOrders(filters?)</div><div class="flow-desc">List orders with step count. Filters: status</div></div></div>
+            <div class="flow-step"><div class="flow-num">Q</div><div class="flow-content"><div class="flow-title">useProductionOrder(id)</div><div class="flow-desc">Single order with all 10 steps</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useCreateOrder()</div><div class="flow-desc">INSERT order → triggers 10 steps auto-created</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useUpdateOrder()</div><div class="flow-desc">UPDATE order status/notes</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useUpdateStep()</div><div class="flow-desc">UPDATE step status. Step 10 DONE → order set to COMPLETE</div></div></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">👥 use-clients.ts</div>
+            <div class="flow-step"><div class="flow-num">Q</div><div class="flow-content"><div class="flow-title">useClients()</div><div class="flow-desc">List all clients ordered by name</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useCreateClient()</div><div class="flow-desc">INSERT client</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useUpdateClient()</div><div class="flow-desc">UPDATE client by id</div></div></div>
+            <div class="flow-step"><div class="flow-num">M</div><div class="flow-content"><div class="flow-title">useDeleteClient()</div><div class="flow-desc">DELETE client by id</div></div></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">⚠️ use-known-issues.ts</div>
+            <div class="flow-step"><div class="flow-num">Q</div><div class="flow-content"><div class="flow-title">useKnownIssues()</div><div class="flow-desc">All active known issues</div></div></div>
+            <div class="flow-step"><div class="flow-num">Q</div><div class="flow-content"><div class="flow-title">useKnownIssuesByCategory(cat, section?)</div><div class="flow-desc">Filter by category OR board section using .or() query</div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FLOWS -->
+    <div id="section-flows" class="section">
+      <h2>Business Flows</h2>
+
+      <div class="grid-2">
+        <div>
+          <div class="card">
+            <div class="card-title">🛠️ Kit Lifecycle</div>
+            <div class="flow-step"><div class="flow-num">1</div><div class="flow-content"><div class="flow-title">Create Kit</div><div class="flow-desc">Staff enters serial + type → DB trigger auto-creates 9 components + 13 mainboard sections for MAIN_BOARD</div></div></div>
+            <div class="flow-step"><div class="flow-num">2</div><div class="flow-content"><div class="flow-title">Kit status: OK</div><div class="flow-desc">Default state. Board map shows all sections, POWER_2 always pulses red as warning</div></div></div>
+            <div class="flow-step"><div class="flow-num">3</div><div class="flow-content"><div class="flow-title">Ticket created on kit</div><div class="flow-desc">If kit.status === OK → auto-updated to TICKET (client-side in useCreateTicket)</div></div></div>
+            <div class="flow-step"><div class="flow-num">4</div><div class="flow-content"><div class="flow-title">Kit status: DEAD</div><div class="flow-desc">Manually set when kit is unrecoverable. Shown with red badge</div></div></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">🎫 Ticket Flow</div>
+            <div class="flow-step"><div class="flow-num">1</div><div class="flow-content"><div class="flow-title">OPEN</div><div class="flow-desc">Created. Optional: linked to client, component, board section</div></div></div>
+            <div class="flow-step"><div class="flow-num">2</div><div class="flow-content"><div class="flow-title">IN_PROGRESS</div><div class="flow-desc">Staff picks it up. Known issues panel suggests solutions</div></div></div>
+            <div class="flow-step"><div class="flow-num">3</div><div class="flow-content"><div class="flow-title">RESOLVED</div><div class="flow-desc">resolved_at timestamp auto-set</div></div></div>
+            <div class="flow-step"><div class="flow-num">4</div><div class="flow-content"><div class="flow-title">CLOSED</div><div class="flow-desc">Final state. Can attach images to comments throughout</div></div></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">⚡ POWER_2 Warning System</div>
+            <div class="warning-box">The #1 installation error is plugging into POWER_2 (right connector) instead of POWER_MAIN (left). This triggers:<br><br>
+            • Board map: POWER_2 always has red pulsing border (.danger-pulse CSS animation)<br>
+            • Ticket form: selecting POWER or WRONG_CONNECTOR category shows amber alert: "Verify power cable is in LEFT connector (POWER_MAIN)"<br>
+            • Known issues: "Wrong Power Connector Installation" seeded as HIGH frequency issue</div>
+          </div>
+        </div>
+
+        <div>
+          <div class="card">
+            <div class="card-title">🏭 Production Flow</div>
+            <div class="flow-step"><div class="flow-num">1</div><div class="flow-content"><div class="flow-title">Create Order (QUEUED)</div><div class="flow-desc">order# + quantity + target date → 10 steps auto-created by DB trigger</div></div></div>
+            <div class="flow-step"><div class="flow-num">2</div><div class="flow-content"><div class="flow-title">ACTIVE</div><div class="flow-desc">Steps: Component Sourcing → PCB Assembly → CM4 Installation → Camera Install → Power Wiring → USB Config → Antenna Wiring → Door Lock → Firmware Flash → Final Inspection</div></div></div>
+            <div class="flow-step"><div class="flow-num">3</div><div class="flow-content"><div class="flow-title">COMPLETE</div><div class="flow-desc">Step 10 marked DONE → order automatically set to COMPLETE</div></div></div>
+            <div class="flow-step"><div class="flow-num">4</div><div class="flow-content"><div class="flow-title">CANCELLED</div><div class="flow-desc">Manually set. Shown in kanban with separate column</div></div></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">🔐 Auth Flow</div>
+            <div class="flow-step"><div class="flow-num">1</div><div class="flow-content"><div class="flow-title">proxy.ts (middleware)</div><div class="flow-desc">Every request checked for valid session. Unauthenticated → redirect /login. Excludes: _next/static, _next/image, favicon, /login</div></div></div>
+            <div class="flow-step"><div class="flow-num">2</div><div class="flow-content"><div class="flow-title">AuthErrorHandler (providers.tsx)</div><div class="flow-desc">On mount: checks for stale/invalid refresh token → auto sign-out → redirect /login</div></div></div>
+            <div class="flow-step"><div class="flow-num">3</div><div class="flow-content"><div class="flow-title">onAuthStateChange</div><div class="flow-desc">SIGNED_OUT event → redirect /login</div></div></div>
+          </div>
+
+          <div class="card">
+            <div class="card-title">🚀 Deploy Flow</div>
+            <div class="flow-step"><div class="flow-num">1</div><div class="flow-content"><div class="flow-title">DeployButton (sidebar)</div><div class="flow-desc">Click → POST /api/deploy</div></div></div>
+            <div class="flow-step"><div class="flow-num">2</div><div class="flow-content"><div class="flow-title">API route</div><div class="flow-desc">GET latest Vercel deployment → POST redeploy with same deploymentId</div></div></div>
+            <div class="flow-step"><div class="flow-num">3</div><div class="flow-content"><div class="flow-title">Result</div><div class="flow-desc">Button shows: deploying → deployed! → link to gbx-ivo-control.vercel.app</div></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ENUMS -->
+    <div id="section-enums" class="section">
+      <h2>Enums & Configuration</h2>
+
+      <div class="card">
+        <h3>Status Enums</h3>
+        <div class="enum-row"><span class="enum-label">KitStatus</span><span class="enum-val ok">OK</span><span class="enum-val" style="color:#f59e0b;">TICKET</span><span class="enum-val danger">DEAD</span></div>
+        <div class="enum-row"><span class="enum-label">ComponentStatus</span><span class="enum-val ok">OK</span><span class="enum-val" style="color:#f59e0b;">FAULTY</span><span class="enum-val" style="color:#a78bfa;">REPLACED</span><span class="enum-val danger">DEAD</span></div>
+        <div class="enum-row"><span class="enum-label">TicketStatus</span><span class="enum-val" style="color:#f59e0b;">OPEN</span><span class="enum-val" style="color:#3b82f6;">IN_PROGRESS</span><span class="enum-val ok">RESOLVED</span><span class="enum-val">CLOSED</span></div>
+        <div class="enum-row"><span class="enum-label">TicketPriority</span><span class="enum-val">LOW</span><span class="enum-val" style="color:#f59e0b;">MEDIUM</span><span class="enum-val" style="color:#f97316;">HIGH</span><span class="enum-val danger">CRITICAL</span></div>
+        <div class="enum-row"><span class="enum-label">ProductionStatus</span><span class="enum-val">QUEUED</span><span class="enum-val" style="color:#3b82f6;">ACTIVE</span><span class="enum-val ok">COMPLETE</span><span class="enum-val danger">CANCELLED</span></div>
+        <div class="enum-row"><span class="enum-label">KitType</span><span class="enum-val ok">NEW</span><span class="enum-val" style="color:#f59e0b;">RETURN</span></div>
+      </div>
+
+      <div class="card">
+        <h3>ComponentType (9 types)</h3>
+        <div class="enum-row">
+          <span class="enum-val">ENCLOSURE</span><span class="enum-val">MAIN_BOARD</span><span class="enum-val">CAMERA_A_140</span><span class="enum-val">CAMERA_B_140</span><span class="enum-val">CAMERA_C_70</span><span class="enum-val">POWER_SUPPLY</span><span class="enum-val">WIFI_ANTENNA</span><span class="enum-val">CELL_ANTENNA</span><span class="enum-val">DOOR_LOCK_CABLE</span>
+        </div>
+        <p style="font-size:0.75rem;color:var(--muted);margin-top:8px;">Camera mappings: CAM A (green) → USB2_3 · CAM B (purple) → USB3_2 · CAM C (yellow) → USB3_1</p>
+      </div>
+
+      <div class="card">
+        <h3>MainboardSection (13 sections)</h3>
+        <div class="enum-row">
+          <span class="enum-val">TOP_CONNECTORS</span><span class="enum-val">CM4</span><span class="enum-val">CELL_MODULE</span><span class="enum-val">WIFI_BT</span><span class="enum-val">HDMI</span><span class="enum-val">USB3_3</span><span class="enum-val">USB3_2</span><span class="enum-val">USB3_1</span><span class="enum-val">USB2_3</span><span class="enum-val">USB2_2</span><span class="enum-val">USB2_1</span><span class="enum-val ok">POWER_MAIN</span><span class="enum-val danger">POWER_2 ⚡</span><span class="enum-val">IO_LOCK</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>IssueCategory (11 categories)</h3>
+        <div class="enum-row">
+          <span class="enum-val">USB</span><span class="enum-val danger">POWER</span><span class="enum-val">CAMERA</span><span class="enum-val">WIFI</span><span class="enum-val">CELLULAR</span><span class="enum-val">DOOR_LOCK</span><span class="enum-val">CM4_PROCESSOR</span><span class="enum-val">ENCLOSURE</span><span class="enum-val">FIRMWARE</span><span class="enum-val danger">WRONG_CONNECTOR</span><span class="enum-val">OTHER</span>
+        </div>
+        <div class="warning-box" style="margin-top:8px;">POWER and WRONG_CONNECTOR trigger the amber warning in the ticket form</div>
+      </div>
+
+      <div class="card">
+        <h3>Production Steps (10 ordered)</h3>
+        <div class="enum-row">
+          <span class="enum-val">1 Component Sourcing</span><span class="enum-val">2 PCB Assembly</span><span class="enum-val">3 CM4 Installation</span><span class="enum-val">4 Camera Installation</span><span class="enum-val">5 Power Wiring</span><span class="enum-val">6 USB Configuration</span><span class="enum-val">7 Antenna Wiring</span><span class="enum-val">8 Door Lock Assembly</span><span class="enum-val">9 Firmware Flash</span><span class="enum-val">10 Final Inspection & Pack</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- TESTS -->
+    <div id="section-tests" class="section">
+      <h2>Test Suite</h2>
+      <p style="color:var(--muted);font-size:0.8rem;margin-bottom:20px;">Puppeteer E2E tests using system Chrome (puppeteer-core). Run from <code style="color:var(--purple);">ivo-kit-manager/</code></p>
+
+      <div class="grid-2">
+        <div class="card">
+          <div class="card-title">📋 Test Files</div>
+          <ul class="file-list">
+            <li>tests/e2e/helpers.js — browser launch, login, pass/fail utils</li>
+            <li>tests/e2e/settings-clients.test.js — Settings dialog + Clients CRUD</li>
+            <li>tests/e2e/full-app.test.js — Complete application flow</li>
+            <li>tests/e2e/debug-clients.js — Supabase network debug helper</li>
+          </ul>
+        </div>
+
+        <div class="card">
+          <div class="card-title">▶️ Commands</div>
+          <div style="font-family:monospace;font-size:0.8rem;color:var(--purple);background:var(--surface2);padding:12px;border-radius:8px;line-height:2;">
+            npm test &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# settings + clients<br>
+            npm run test:full &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# full app E2E<br>
+            npm run dev &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;# localhost:3003
+          </div>
+          <p style="margin-top:12px;font-size:0.75rem;color:var(--muted);">Credentials read from <code style="color:var(--purple);">.env.local</code>: TEST_EMAIL + TEST_PASSWORD</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">✅ Full App Test Coverage</div>
+        <div class="flow-step"><div class="flow-num" style="background:#22c55e;">1</div><div class="flow-content"><div class="flow-title">Login</div><div class="flow-desc">Email + password → redirect to dashboard</div></div></div>
+        <div class="flow-step"><div class="flow-num" style="background:#22c55e;">2</div><div class="flow-content"><div class="flow-title">Dashboard</div><div class="flow-desc">Stats cards + widgets visible</div></div></div>
+        <div class="flow-step"><div class="flow-num" style="background:#22c55e;">3</div><div class="flow-content"><div class="flow-title">Stock list + Create kit</div><div class="flow-desc">Add Kit dialog, serial number search</div></div></div>
+        <div class="flow-step"><div class="flow-num" style="background:#22c55e;">4</div><div class="flow-content"><div class="flow-title">Kit detail</div><div class="flow-desc">Component grid (9 items), Board Map tab + POWER_2</div></div></div>
+        <div class="flow-step"><div class="flow-num" style="background:#22c55e;">5</div><div class="flow-content"><div class="flow-title">Tickets list + Create ticket</div><div class="flow-desc">Kit combobox, category, creates and navigates</div></div></div>
+        <div class="flow-step"><div class="flow-num" style="background:#22c55e;">6</div><div class="flow-content"><div class="flow-title">Ticket detail</div><div class="flow-desc">Known issues panel + comments section</div></div></div>
+        <div class="flow-step"><div class="flow-num" style="background:#22c55e;">7</div><div class="flow-content"><div class="flow-title">Production list + Create order</div><div class="flow-desc">Table/Board toggle, order form</div></div></div>
+        <div class="flow-step"><div class="flow-num" style="background:#22c55e;">8</div><div class="flow-content"><div class="flow-title">Production order detail</div><div class="flow-desc">10-step pipeline visible</div></div></div>
+        <div class="flow-step"><div class="flow-num" style="background:#22c55e;">9</div><div class="flow-content"><div class="flow-title">Settings</div><div class="flow-desc">Both tabs, theme toggle, clients tab</div></div></div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /main -->
+
+<script>
+function show(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('visible'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('section-' + id).classList.add('visible');
+  document.getElementById('nav-' + id).classList.add('active');
+}
+</script>
+</body>
+</html>
