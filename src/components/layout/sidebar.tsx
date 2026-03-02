@@ -7,6 +7,8 @@ import {
   Package,
   TicketIcon,
   Factory,
+  Archive,
+  CheckSquare,
   Layers,
   LogOut,
 } from "lucide-react";
@@ -24,6 +26,8 @@ import { canAccess, ROLE_CONFIG } from "@/lib/permissions";
 const navItems = [
   { href: "/", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/production", icon: Factory, label: "Production" },
+  { href: "/lots", icon: Archive, label: "Lots" },
+  { href: "/manufactured", icon: CheckSquare, label: "Manufactured" },
   { href: "/stock", icon: Package, label: "Stock" },
   { href: "/kits", icon: Layers, label: "Kits" },
   { href: "/tickets", icon: TicketIcon, label: "Tickets", badge: true },
@@ -116,7 +120,7 @@ export function Sidebar() {
               )}
             >
               <Icon className="h-4 w-4 flex-shrink-0" />
-              <span className="flex-1">{label}</span>
+              <span className="flex-1 uppercase">{label}</span>
               {badge && openTicketCount > 0 && (
                 <Badge className="bg-amber-400/15 text-amber-400 border border-amber-400/20 text-xs px-1.5 py-0 h-5">
                   {openTicketCount}
