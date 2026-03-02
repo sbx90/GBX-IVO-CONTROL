@@ -309,7 +309,21 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string): ParsedItem[] {
 
   console.log(`[EXCEL PARSER] Total rows (incl. header): ${rows.length}`);
 
-  const header = rows[0] as (string | null)[];
+  // Auto-detect header row: skip title rows (e.g. "LOT 2"), find first row
+  // where even-column cells look like part numbers (contain "-" or "_")
+  let headerIdx = 0;
+  for (let i = 0; i < Math.min(rows.length, 5); i++) {
+    const row = rows[i] as (string | number | null)[];
+    const hasPartNumbers = [0, 2, 4, 6, 8, 10].some(c => {
+      const v = row[c];
+      return typeof v === "string" && (v.includes("-") || v.includes("_"));
+    });
+    if (hasPartNumbers) { headerIdx = i; break; }
+  }
+  if (headerIdx > 0) console.log(`[EXCEL PARSER] Skipped ${headerIdx} title row(s), header at row ${headerIdx + 1}`);
+  const dataStart = headerIdx + 1;
+
+  const header = rows[headerIdx] as (string | null)[];
   const componentCols: { col: number; partNumber: string; isRange: boolean }[] = [];
   for (let c = 0; c < header.length; c += 2) {
     const h = header[c];
@@ -323,7 +337,7 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string): ParsedItem[] {
 
   const dataColIndices = componentCols.map(c => c.col);
   let separatorRow = -1;
-  for (let r = 2; r < rows.length; r++) {
+  for (let r = dataStart + 1; r < rows.length; r++) {
     const row = rows[r] as (string | number | null)[];
     if (dataColIndices.every(ci => row[ci] == null || row[ci] === "")) {
       separatorRow = r;
@@ -339,7 +353,7 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string): ParsedItem[] {
     if (comp.isRange) {
       const rawRanges: string[] = [];
       let rangeCount = 0;
-      for (let r = 1; r < normalEnd; r++) {
+      for (let r = dataStart; r < normalEnd; r++) {
         const row = rows[r] as (string | number | null)[];
         const val = row[comp.col];
         if (val == null || val === "") continue;
@@ -359,7 +373,7 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string): ParsedItem[] {
       let firstBlankRow = -1;
       let firstAddedRow = -1, lastAddedRow = -1;
       let firstBadRow = -1, lastBadRow = -1;
-      for (let r = 1; r < rows.length; r++) {
+      for (let r = dataStart; r < rows.length; r++) {
         const row = rows[r] as (string | number | null)[];
         const val = row[comp.col];
         const isEmpty = val == null || val === "";
