@@ -459,8 +459,8 @@ function fmt(n: number) { return n.toLocaleString(); }
 export default function LotsPage() {
   const { data: lotImports = [] } = useLotImports();
   const { data: clients = [] } = useClients();
-  const { data: activeOrders = [] } = useProductionOrders({ status: "ACTIVE" });
-  const eligibleOrders = activeOrders.filter((o) =>
+  const { data: allOrders = [] } = useProductionOrders();
+  const eligibleOrders = allOrders.filter((o) =>
     o.production_steps?.some((s) => s.step_number === 5 && s.status === "DONE")
   );
 
