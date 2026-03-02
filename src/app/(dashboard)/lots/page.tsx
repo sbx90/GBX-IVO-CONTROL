@@ -2,7 +2,7 @@
 
 import { useState, useRef } from "react";
 import {
-  FileSpreadsheet, Upload, CheckCircle2, XCircle, Download, FileText, Trash2,
+  FileSpreadsheet, Upload, CheckCircle2, XCircle, Download, FileText, Trash2, AlertTriangle,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
@@ -506,6 +506,8 @@ export default function LotsPage() {
   const [parsedItems, setParsedItems] = useState<ParsedItem[] | null>(null);
   const [importSummary, setImportSummary] = useState<Record<string, PartSummary> | null>(null);
   const [crossRefChecks, setCrossRefChecks] = useState<CheckItem[] | null>(null);
+  const [duplicates, setDuplicates] = useState<{ part_number: string; serial_number: string; lot_number: string | null }[] | null>(null);
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
   const [snError, setSnError] = useState("");
   const [snFile, setSnFile] = useState<File | null>(null);
   const [snDragging, setSnDragging] = useState(false);
@@ -539,11 +541,38 @@ export default function LotsPage() {
     e.target.value = "";
   }
 
+  async function checkForDuplicates(parsed: ParsedItem[]) {
+    setCheckingDuplicates(true);
+    setDuplicates(null);
+    try {
+      const supabase = createClient();
+      const groups: Record<string, string[]> = {};
+      for (const item of parsed) {
+        if (!groups[item.part_number]) groups[item.part_number] = [];
+        groups[item.part_number].push(item.serial_number);
+      }
+      const found: { part_number: string; serial_number: string; lot_number: string | null }[] = [];
+      for (const [partNumber, serials] of Object.entries(groups)) {
+        const { data } = await supabase
+          .from("manufactured_items")
+          .select("part_number, serial_number, lot_number")
+          .eq("part_number", partNumber)
+          .in("serial_number", serials);
+        if (data) found.push(...data);
+      }
+      setDuplicates(found);
+    } catch {
+      setDuplicates([]);
+    } finally {
+      setCheckingDuplicates(false);
+    }
+  }
+
   function handleSnFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file || !importLot.trim()) { setSnError("Enter a LOT # first."); return; }
     setSnFile(file);
-    setSnError(""); setParsedItems(null); setImportSummary(null); setCrossRefChecks(null);
+    setSnError(""); setParsedItems(null); setImportSummary(null); setCrossRefChecks(null); setDuplicates(null);
 
     const isCSV = file.name.toLowerCase().endsWith(".csv");
     const reader = new FileReader();
@@ -558,6 +587,7 @@ export default function LotsPage() {
           setParsedItems(parsed);
           setImportSummary(buildImportSummary(parsed));
           if (plData) setCrossRefChecks(buildCrossRefChecks(plData, parsed));
+          checkForDuplicates(parsed);
         } catch (err) {
           setSnError(`Parse error: ${err instanceof Error ? err.message : "Unknown error"}`);
         }
@@ -571,6 +601,7 @@ export default function LotsPage() {
           setParsedItems(parsed);
           setImportSummary(buildImportSummary(parsed));
           if (plData) setCrossRefChecks(buildCrossRefChecks(plData, parsed));
+          checkForDuplicates(parsed);
         } catch (err) {
           setSnError(`Parse error: ${err instanceof Error ? err.message : "Unknown error"}`);
         }
@@ -907,6 +938,51 @@ export default function LotsPage() {
                       {summaryTotals.manual > 0 && <span className="text-purple-400">{fmt(summaryTotals.manual)} Manual</span>}
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* Duplicate check */}
+              {(checkingDuplicates || duplicates !== null) && (
+                <div className={`rounded-lg p-3 space-y-2 ${duplicates && duplicates.length > 0 ? "bg-red-500/10 border border-red-500/20" : "bg-zinc-800/60"}`}>
+                  <p className={`text-xs font-medium uppercase tracking-wider ${duplicates && duplicates.length > 0 ? "text-red-400" : "text-zinc-500"}`}>
+                    Duplicate Serial Check
+                  </p>
+                  {checkingDuplicates && (
+                    <p className="text-zinc-500 text-xs">Checking against existing inventory…</p>
+                  )}
+                  {!checkingDuplicates && duplicates !== null && duplicates.length === 0 && (
+                    <div className="flex items-center gap-1.5 text-green-400 text-xs">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      No duplicate serial numbers found
+                    </div>
+                  )}
+                  {!checkingDuplicates && duplicates && duplicates.length > 0 && (
+                    <>
+                      <div className="flex items-center gap-1.5 text-red-400 text-xs font-medium">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        {duplicates.length} serial number{duplicates.length !== 1 ? "s" : ""} already exist in inventory — will be skipped
+                      </div>
+                      <div className="space-y-1 max-h-40 overflow-y-auto mt-1">
+                        {Object.entries(
+                          duplicates.reduce((acc, d) => {
+                            if (!acc[d.part_number]) acc[d.part_number] = [];
+                            acc[d.part_number].push(d);
+                            return acc;
+                          }, {} as Record<string, typeof duplicates>)
+                        ).map(([part, items]) => (
+                          <div key={part}>
+                            <p className="text-zinc-400 text-[10px] font-mono font-medium mb-0.5">{part}</p>
+                            {items.map((d, i) => (
+                              <div key={i} className="flex justify-between text-[10px] pl-2">
+                                <span className="font-mono text-red-300">{d.serial_number}</span>
+                                <span className="text-zinc-500">{d.lot_number ? `→ ${d.lot_number}` : "→ no LOT"}</span>
+                              </div>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
               )}
 
