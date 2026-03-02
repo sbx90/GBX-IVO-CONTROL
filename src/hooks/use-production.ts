@@ -108,7 +108,7 @@ export function useUpdateOrder() {
     }: {
       id: string;
       updates: Partial<
-        Pick<ProductionOrder, "status" | "notes" | "target_date" | "current_step">
+        Pick<ProductionOrder, "status" | "notes" | "target_date" | "current_step" | "manufacture_code">
       >;
     }) => {
       const supabase = getSupabase();
@@ -199,8 +199,8 @@ export function useUpdateStep() {
           .eq("id", step.order_id);
       }
 
-      // If the last step (10) is DONE, mark the order as COMPLETE
-      if (newStatus === "DONE" && step.step_number === 10) {
+      // If the last step (11) is DONE, mark the order as COMPLETE
+      if (newStatus === "DONE" && step.step_number === 11) {
         await supabase
           .from("production_orders")
           .update({ status: "COMPLETE" })

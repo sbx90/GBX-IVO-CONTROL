@@ -1,0 +1,928 @@
+"use client";
+
+import { useState, useRef } from "react";
+import {
+  FileSpreadsheet, Upload, CheckCircle2, XCircle, Download, FileText, Trash2,
+} from "lucide-react";
+import * as XLSX from "xlsx";
+import JSZip from "jszip";
+import { createClient } from "@/lib/supabase/client";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Separator } from "@/components/ui/separator";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import {
+  useLotImports,
+  useCreateLotImport,
+  useUpdateLotImport,
+  useDeleteLotImport,
+  useBulkCreateManufacturedItems,
+} from "@/hooks/use-manufactured";
+import { useClients } from "@/hooks/use-clients";
+import { useProductionOrders } from "@/hooks/use-production";
+import { formatDate } from "@/lib/utils";
+import type { ManufacturedItemStatus, CreateManufacturedItemInput, LotImport, LotStatus } from "@/lib/types/database";
+
+// ─── PL (DOCX) types & parser ──────────────────────────────────────
+
+interface PLRow {
+  partNumber: string;
+  size: string;
+  volumePerBox: number;
+  weightPerBox: number;
+  boxes: number;
+  qtyPerBox: number;
+  qtyTotal: number;
+  label: string;
+}
+
+interface PLSummary {
+  totalBoxes: number;
+  totalParts: number;
+  totalVolume: number;
+  totalWeight: number;
+}
+
+interface PLData {
+  summary: PLSummary;
+  rows: PLRow[];
+}
+
+interface CheckItem {
+  label: string;
+  passed: boolean;
+  detail: string;
+}
+
+async function parseDocxPL(buffer: ArrayBuffer): Promise<PLData> {
+  const zip = await JSZip.loadAsync(buffer);
+  const xmlStr = await zip.file("word/document.xml")!.async("string");
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(xmlStr, "text/xml");
+
+  const allText = Array.from(xml.querySelectorAll("p"))
+    .map((p) => Array.from(p.querySelectorAll("t")).map((t) => t.textContent).join(""))
+    .filter(Boolean);
+
+  const summary: PLSummary = { totalBoxes: 0, totalParts: 0, totalVolume: 0, totalWeight: 0 };
+  for (const line of allText) {
+    const numMatch = (pattern: RegExp) => {
+      const m = line.match(pattern);
+      return m ? parseFloat(m[1].replace(/,/g, "")) : null;
+    };
+    if (/Total Master Boxes/i.test(line)) summary.totalBoxes = numMatch(/([\d,]+)\s*pcs/) ?? 0;
+    else if (/Total parts/i.test(line)) summary.totalParts = numMatch(/([\d,]+)\s*pcs/) ?? 0;
+    else if (/Total Volume/i.test(line)) summary.totalVolume = numMatch(/([\d.]+)\s*m/) ?? 0;
+    else if (/Total Weight/i.test(line)) summary.totalWeight = numMatch(/([\d.]+)\s*kg/) ?? 0;
+  }
+
+  const tableRows = Array.from(xml.querySelectorAll("tr"));
+  const rows: PLRow[] = [];
+  for (let ri = 1; ri < tableRows.length; ri++) {
+    const cells = Array.from(tableRows[ri].querySelectorAll("tc"))
+      .map((tc) => Array.from(tc.querySelectorAll("t")).map((t) => t.textContent ?? "").join("").trim());
+    if (cells.length < 7) continue;
+    const [pn, size, vol, wt, boxes, qtyBox, qtyTotal] = cells;
+    if (!pn || !boxes) continue;
+    const n = (s: string) => parseFloat(s.replace(/[^\d.]/g, "")) || 0;
+    rows.push({ partNumber: pn, size, volumePerBox: n(vol), weightPerBox: n(wt), boxes: n(boxes), qtyPerBox: n(qtyBox), qtyTotal: n(qtyTotal), label: cells[7] ?? "" });
+  }
+  return { summary, rows };
+}
+
+function buildPLChecklist(pl: PLData): CheckItem[] {
+  const checks: CheckItem[] = [];
+  const tol = (a: number, b: number, t: number) => Math.abs(a - b) <= t;
+  for (const row of pl.rows) {
+    const calc = row.boxes * row.qtyPerBox;
+    checks.push({ label: `${row.partNumber}: ${row.boxes}×${row.qtyPerBox}/box`, passed: calc === row.qtyTotal, detail: calc === row.qtyTotal ? `= ${row.qtyTotal} ✓` : `= ${calc}, stated ${row.qtyTotal}` });
+  }
+  const calcBoxes = pl.rows.reduce((s, r) => s + r.boxes, 0);
+  const calcParts = pl.rows.reduce((s, r) => s + r.qtyTotal, 0);
+  const calcVol   = pl.rows.reduce((s, r) => s + r.boxes * r.volumePerBox, 0);
+  const calcWt    = pl.rows.reduce((s, r) => s + r.boxes * r.weightPerBox, 0);
+  checks.push({ label: "Total Master Boxes", passed: calcBoxes === pl.summary.totalBoxes, detail: `${calcBoxes} vs ${pl.summary.totalBoxes} stated` });
+  checks.push({ label: "Total Parts",        passed: calcParts === pl.summary.totalParts,  detail: `${calcParts} vs ${pl.summary.totalParts} stated` });
+  checks.push({ label: "Total Volume",       passed: tol(calcVol, pl.summary.totalVolume, 0.1), detail: `${calcVol.toFixed(3)} m³ vs ${pl.summary.totalVolume} m³ stated` });
+  checks.push({ label: "Total Weight",       passed: tol(calcWt,  pl.summary.totalWeight,  5),  detail: `${calcWt.toFixed(0)} kg vs ${pl.summary.totalWeight} kg stated` });
+  return checks;
+}
+
+// ─── CSV parser ────────────────────────────────────────────────────
+
+type ParsedItem = CreateManufacturedItemInput;
+
+function parseCSVRows(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"' && text[i + 1] === '"') { cell += '"'; i++; }
+      else if (ch === '"') { inQuotes = false; }
+      else { cell += ch; }
+    } else {
+      if (ch === '"') { inQuotes = true; }
+      else if (ch === ',') { row.push(cell.trim()); cell = ""; }
+      else if (ch === '\n') { row.push(cell.trim()); rows.push(row); row = []; cell = ""; }
+      else if (ch !== '\r') { cell += ch; }
+    }
+  }
+  if (cell.trim() || row.length > 0) { row.push(cell.trim()); rows.push(row); }
+  return rows;
+}
+
+function expandRange(rangeStr: string): string[] {
+  if (!rangeStr.includes("-")) return [];
+  const [startStr, rawEnd] = rangeStr.split("-");
+  const s = parseInt(startStr, 10);
+  if (isNaN(s)) return [];
+
+  let endStr = rawEnd;
+  if (rawEnd.length > startStr.length) {
+    let fixed = "";
+    for (let i = 0; i < rawEnd.length; i++) {
+      const candidate = rawEnd.slice(0, i) + rawEnd.slice(i + 1);
+      if (candidate.length !== startStr.length) continue;
+      const c = parseInt(candidate, 10);
+      if (!isNaN(c) && c >= s && c - s <= 9999) { fixed = candidate; break; }
+    }
+    endStr = fixed || rawEnd.slice(0, startStr.length);
+  }
+
+  const end = parseInt(endStr, 10);
+  if (isNaN(end) || end < s || end - s > 9999) return [];
+  const result: string[] = [];
+  for (let sn = s; sn <= end; sn++) result.push(sn.toString());
+  return result;
+}
+
+function parseCSVLot(csvText: string, lotNumber: string): ParsedItem[] {
+  const rows = parseCSVRows(csvText);
+  if (rows.length < 2) return [];
+
+  console.log(`[LOT PARSER] Total CSV rows (incl. header): ${rows.length}`);
+
+  const headerRow = rows[0];
+  interface ColDef { col: number; partNumber: string; type: "individual" | "range" | "skip" }
+  const cols: ColDef[] = [];
+  for (let c = 0; c < headerRow.length; c += 2) {
+    const h = headerRow[c]?.trim();
+    if (!h) continue;
+    const type: ColDef["type"] = (c === 12) ? "skip" : (c === 8 || c === 10) ? "range" : "individual";
+    cols.push({ col: c, partNumber: h, type });
+  }
+
+  const colLetters = (i: number) => String.fromCharCode(65 + i);
+  console.log(`[LOT PARSER] Detected columns:`, cols.map(c => `${colLetters(c.col)}=${c.partNumber}(${c.type})`).join(", "));
+
+  const dataColIndices = cols.filter(c => c.type !== "skip").map(c => c.col);
+  let separatorRow = -1;
+  for (let r = 2; r < rows.length; r++) {
+    if (dataColIndices.every(ci => !rows[r][ci]?.trim())) {
+      separatorRow = r;
+      break;
+    }
+  }
+  const normalEnd = separatorRow > 0 ? separatorRow : rows.length;
+
+  console.log(`[LOT PARSER] Separator row: ${separatorRow === -1 ? "NOT FOUND" : `row ${separatorRow} (CSV row ${separatorRow + 1})`}`);
+
+  const items: ParsedItem[] = [];
+
+  for (const col of cols) {
+    if (col.type === "skip") continue;
+
+    if (col.type === "individual") {
+      let stopRow = -1;
+      const statusCounts: Record<string, number> = { ADDED: 0, BAD: 0, MANUAL: 0, SKIP: 0 };
+      for (let r = 1; r < rows.length; r++) {
+        const val = rows[r][col.col]?.trim();
+        if (!val) { stopRow = r; break; }
+        if (!/^\d+(\.\d+)?$/.test(val)) continue;
+        const sn = val.includes(".") ? val.split(".")[0] : val;
+        const note = (rows[r][col.col + 1] ?? "").trim().toLowerCase();
+        if (note === "missing") { statusCounts.SKIP++; continue; }
+        const status: ManufacturedItemStatus = note.includes("taken by you") ? "MANUAL" : note ? "BAD" : "CREATED";
+        statusCounts[status]++;
+        items.push({ part_number: col.partNumber, serial_number: sn, lot_number: lotNumber, status });
+      }
+      console.log(
+        `[LOT PARSER] ${colLetters(col.col)} (${col.partNumber}): ` +
+        `started row 2, stopped at ${stopRow === -1 ? "end of file" : `row ${stopRow + 1} (blank)`} — ` +
+        `ADDED=${statusCounts.ADDED} BAD=${statusCounts.BAD} MANUAL=${statusCounts.MANUAL} SKIP=${statusCounts.SKIP}`
+      );
+    } else {
+      let rangeCount = 0;
+      const rawRanges: string[] = [];
+      for (let r = 1; r < normalEnd; r++) {
+        const val = rows[r][col.col]?.trim();
+        if (!val) continue;
+        if (!val.includes("-")) continue;
+        rawRanges.push(val);
+        const expanded = expandRange(val);
+        rangeCount += expanded.length;
+        for (const sn of expanded) {
+          items.push({ part_number: col.partNumber, serial_number: sn, lot_number: lotNumber, status: "CREATED" });
+        }
+      }
+      console.log(
+        `[LOT PARSER] ${colLetters(col.col)} (${col.partNumber}): ` +
+        `range column, scanned rows 2–${normalEnd + 1} — ` +
+        `ranges found: [${rawRanges.join(", ")}] → ADDED=${rangeCount}`
+      );
+    }
+  }
+
+  if (separatorRow > 0) {
+    let excStart = separatorRow + 1;
+    while (excStart < rows.length && rows[excStart].every(c => !c?.trim())) excStart++;
+
+    const excCounts: Record<string, number> = {};
+    for (let r = excStart; r < rows.length; r++) {
+      const row = rows[r];
+      if (row.every(c => !c?.trim())) continue;
+      for (const col of cols) {
+        if (col.type === "skip") continue;
+        const val = row[col.col]?.trim();
+        if (!val) continue;
+        if (!/^\d/.test(val)) continue;
+        const sn = val.includes(".") ? val.split(".")[0] : val;
+        const note = (row[col.col + 1] ?? "").trim().toLowerCase();
+        if (note === "missing") continue;
+        const status: ManufacturedItemStatus = note.includes("taken by you") ? "MANUAL" : "BAD";
+        const key = `${col.partNumber}:${status}`;
+        excCounts[key] = (excCounts[key] ?? 0) + 1;
+        if (col.type === "range" && sn.includes("-")) {
+          for (const expandedSn of expandRange(sn)) {
+            items.push({ part_number: col.partNumber, serial_number: expandedSn, lot_number: lotNumber, status });
+          }
+        } else {
+          items.push({ part_number: col.partNumber, serial_number: sn, lot_number: lotNumber, status });
+        }
+      }
+    }
+    if (Object.keys(excCounts).length > 0) {
+      console.log(`[LOT PARSER] Exception section items:`, excCounts);
+    }
+  }
+
+  const totalByStatus = items.reduce((acc, i) => { const s = i.status ?? "CREATED"; acc[s] = (acc[s] ?? 0) + 1; return acc; }, {} as Record<string, number>);
+  console.log(`[LOT PARSER] FINAL TOTALS:`, totalByStatus);
+
+  return items;
+}
+
+// ─── Excel parser (XLSX) ───────────────────────────────────────────
+
+function parseExcelLot(buffer: ArrayBuffer, lotNumber: string): ParsedItem[] {
+  const wb = XLSX.read(buffer, { type: "array" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json<(string | number | null)[]>(ws, { header: 1 });
+  if (rows.length === 0) return [];
+
+  console.log(`[EXCEL PARSER] Total rows (incl. header): ${rows.length}`);
+
+  const header = rows[0] as (string | null)[];
+  const componentCols: { col: number; partNumber: string; isRange: boolean }[] = [];
+  for (let c = 0; c < header.length; c += 2) {
+    const h = header[c];
+    if (!h || typeof h !== "string") continue;
+    if (h.toUpperCase().includes("RCW")) continue;
+    componentCols.push({ col: c, partNumber: h, isRange: h.toUpperCase().includes("PS") || h.toUpperCase().includes("CDL") });
+  }
+
+  const colLetters = (i: number) => String.fromCharCode(65 + i);
+  console.log(`[EXCEL PARSER] Detected columns:`, componentCols.map(c => `${colLetters(c.col)}=${c.partNumber}(${c.isRange ? "range" : "individual"})`).join(", "));
+
+  const dataColIndices = componentCols.map(c => c.col);
+  let separatorRow = -1;
+  for (let r = 2; r < rows.length; r++) {
+    const row = rows[r] as (string | number | null)[];
+    if (dataColIndices.every(ci => row[ci] == null || row[ci] === "")) {
+      separatorRow = r;
+      break;
+    }
+  }
+  console.log(`[EXCEL PARSER] Separator row: ${separatorRow === -1 ? "NOT FOUND" : `index ${separatorRow} (file row ${separatorRow + 1})`}`);
+  const normalEnd = separatorRow > 0 ? separatorRow : rows.length;
+
+  const items: ParsedItem[] = [];
+
+  for (const comp of componentCols) {
+    if (comp.isRange) {
+      const rawRanges: string[] = [];
+      let rangeCount = 0;
+      for (let r = 1; r < normalEnd; r++) {
+        const row = rows[r] as (string | number | null)[];
+        const val = row[comp.col];
+        if (val == null || val === "") continue;
+        const strVal = val.toString().trim();
+        if (!strVal.includes("-")) continue;
+        rawRanges.push(strVal);
+        const expanded = expandRange(strVal);
+        rangeCount += expanded.length;
+        for (const sn of expanded) {
+          items.push({ part_number: comp.partNumber, serial_number: sn, lot_number: lotNumber, status: "CREATED" });
+        }
+      }
+      console.log(`[EXCEL PARSER] ${colLetters(comp.col)} (${comp.partNumber}): ranges [${rawRanges.join(", ")}] → ADDED=${rangeCount}`);
+    } else {
+      let seenBlank = false;
+      const statusCounts = { CREATED: 0, BAD: 0 };
+      let firstBlankRow = -1;
+      let firstAddedRow = -1, lastAddedRow = -1;
+      let firstBadRow = -1, lastBadRow = -1;
+      for (let r = 1; r < rows.length; r++) {
+        const row = rows[r] as (string | number | null)[];
+        const val = row[comp.col];
+        const isEmpty = val == null || val === "";
+        if (isEmpty) {
+          if (!seenBlank) { seenBlank = true; firstBlankRow = r; }
+          continue;
+        }
+        const strVal = val.toString().trim();
+        if (!(typeof val === "number" || /^\d+$/.test(strVal))) continue;
+        const status: ManufacturedItemStatus = seenBlank ? "BAD" : "CREATED";
+        statusCounts[status]++;
+        items.push({ part_number: comp.partNumber, serial_number: strVal, lot_number: lotNumber, status });
+        if (status === "CREATED") {
+          if (firstAddedRow === -1) firstAddedRow = r;
+          lastAddedRow = r;
+        } else {
+          if (firstBadRow === -1) firstBadRow = r;
+          lastBadRow = r;
+        }
+      }
+      const col = colLetters(comp.col);
+      const addedRange = firstAddedRow !== -1 ? `${col}${firstAddedRow + 1}:${col}${lastAddedRow + 1}` : "—";
+      const badRange = firstBadRow !== -1 ? `${col}${firstBadRow + 1}:${col}${lastBadRow + 1}` : "none";
+      const blankAt = firstBlankRow !== -1 ? `${col}${firstBlankRow + 1}` : "never";
+      console.log(
+        `[EXCEL PARSER] ${col} (${comp.partNumber}): ` +
+        `CREATED ${addedRange} (${statusCounts.CREATED} items) | ` +
+        `first blank: ${blankAt} | ` +
+        `BAD ${badRange} (${statusCounts.BAD} items)`
+      );
+    }
+  }
+
+  const totalByStatus = items.reduce((acc, i) => { const s = i.status ?? "CREATED"; acc[s] = (acc[s] ?? 0) + 1; return acc; }, {} as Record<string, number>);
+  console.log(`[EXCEL PARSER] FINAL TOTALS:`, totalByStatus);
+
+  return items;
+}
+
+// ─── Cross-reference ───────────────────────────────────────────────
+
+const normPart = (s: string) => s.replace(/-/g, "_").toUpperCase();
+
+function buildCrossRefChecks(pl: PLData, parsedItems: ParsedItem[]): CheckItem[] {
+  const countByPart: Record<string, number> = {};
+  for (const item of parsedItems) {
+    if (item.status !== "CREATED") continue;
+    const key = normPart(item.part_number);
+    countByPart[key] = (countByPart[key] ?? 0) + 1;
+  }
+  return pl.rows
+    .filter((r) => !r.partNumber.toUpperCase().includes("RCW"))
+    .map((row) => {
+      const actual = countByPart[normPart(row.partNumber)] ?? 0;
+      return { label: row.partNumber, passed: actual === row.qtyTotal, detail: `Parsed: ${actual} | PL expected: ${row.qtyTotal}` };
+    });
+}
+
+// ─── Import summary ────────────────────────────────────────────────
+
+interface PartSummary { added: number; bad: number; manual: number; skipped: number }
+
+function buildImportSummary(items: ParsedItem[]): Record<string, PartSummary> {
+  const byPart: Record<string, PartSummary> = {};
+  for (const item of items) {
+    if (!byPart[item.part_number]) byPart[item.part_number] = { added: 0, bad: 0, manual: 0, skipped: 0 };
+    if (item.status === "CREATED") byPart[item.part_number].added++;
+    else if (item.status === "BAD") byPart[item.part_number].bad++;
+    else if (item.status === "MANUAL") byPart[item.part_number].manual++;
+  }
+  return byPart;
+}
+
+// ─── Config ────────────────────────────────────────────────────────
+
+const ALL_LOT_STATUSES: LotStatus[] = ["DELIVERED", "IN_TRANSIT", "AT_WAREHOUSE", "AT_FACTORY", "DELAYED"];
+
+const LOT_STATUS_CONFIG: Record<LotStatus, { label: string; className: string }> = {
+  DELIVERED:    { label: "Delivered",    className: "bg-green-500/15 text-green-400 border-0" },
+  IN_TRANSIT:   { label: "In Transit",   className: "bg-blue-500/15 text-blue-400 border-0" },
+  AT_WAREHOUSE: { label: "At Warehouse", className: "bg-amber-400/15 text-amber-400 border-0" },
+  AT_FACTORY:   { label: "At Factory",   className: "bg-zinc-700 text-zinc-300 border-0" },
+  DELAYED:      { label: "Delayed",      className: "bg-red-500/15 text-red-400 border-0" },
+};
+
+// ─── Helpers ───────────────────────────────────────────────────────
+
+function CheckIcon({ passed }: { passed: boolean }) {
+  if (passed) return <CheckCircle2 className="h-4 w-4 text-green-400 flex-shrink-0 mt-0.5" />;
+  return <XCircle className="h-4 w-4 text-red-400 flex-shrink-0 mt-0.5" />;
+}
+
+function fmt(n: number) { return n.toLocaleString(); }
+
+// ─── Page ──────────────────────────────────────────────────────────
+
+export default function LotsPage() {
+  const { data: lotImports = [] } = useLotImports();
+  const { data: clients = [] } = useClients();
+  const { data: activeOrders = [] } = useProductionOrders({ status: "ACTIVE" });
+  const eligibleOrders = activeOrders.filter((o) =>
+    o.production_steps?.some((s) => s.step_number === 5 && s.status === "DONE")
+  );
+
+  const createLotImport = useCreateLotImport();
+  const updateLotImport = useUpdateLotImport();
+  const deleteLotImport = useDeleteLotImport();
+  const bulkCreate = useBulkCreateManufacturedItems();
+
+  function handleDeleteLot(lot: LotImport) {
+    if (!confirm(`Delete LOT "${lot.lot_number}" and all ${fmt(lot.item_count)} associated items? This cannot be undone.`)) return;
+    deleteLotImport.mutate({ id: lot.id, lot_number: lot.lot_number, docx_path: lot.docx_path, xlsx_path: lot.xlsx_path });
+  }
+
+  // ── Import dialog state ──
+  const [importOpen, setImportOpen] = useState(false);
+  const [importLot, setImportLot] = useState("");
+  const [importClientId, setImportClientId] = useState("none");
+  const [importOrderId, setImportOrderId] = useState("none");
+
+  // PL
+  const [plChecks, setPlChecks] = useState<CheckItem[] | null>(null);
+  const [plData, setPlData] = useState<PLData | null>(null);
+  const [plError, setPlError] = useState("");
+  const [docxFile, setDocxFile] = useState<File | null>(null);
+  const [docxDragging, setDocxDragging] = useState(false);
+  const docxRef = useRef<HTMLInputElement>(null);
+
+  // Serial number file
+  const [parsedItems, setParsedItems] = useState<ParsedItem[] | null>(null);
+  const [importSummary, setImportSummary] = useState<Record<string, PartSummary> | null>(null);
+  const [crossRefChecks, setCrossRefChecks] = useState<CheckItem[] | null>(null);
+  const [snError, setSnError] = useState("");
+  const [snFile, setSnFile] = useState<File | null>(null);
+  const [snDragging, setSnDragging] = useState(false);
+  const snFileRef = useRef<HTMLInputElement>(null);
+
+  function openImport() {
+    setPlChecks(null); setPlData(null); setPlError(""); setDocxFile(null);
+    setParsedItems(null); setImportSummary(null); setCrossRefChecks(null); setSnError(""); setSnFile(null);
+    setImportLot(""); setImportClientId("none"); setImportOrderId("none");
+    setImportOpen(true);
+  }
+
+  function handleDocxChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setDocxFile(file);
+    setPlError(""); setPlChecks(null); setPlData(null);
+    setParsedItems(null); setImportSummary(null); setCrossRefChecks(null);
+    const reader = new FileReader();
+    reader.onerror = () => setPlError("Could not read the file.");
+    reader.onload = async (ev) => {
+      try {
+        const pl = await parseDocxPL(ev.target?.result as ArrayBuffer);
+        setPlData(pl);
+        setPlChecks(buildPLChecklist(pl));
+      } catch (err) {
+        setPlError(`Parse error: ${err instanceof Error ? err.message : "Unknown error"}`);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = "";
+  }
+
+  function handleSnFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !importLot.trim()) { setSnError("Enter a LOT # first."); return; }
+    setSnFile(file);
+    setSnError(""); setParsedItems(null); setImportSummary(null); setCrossRefChecks(null);
+
+    const isCSV = file.name.toLowerCase().endsWith(".csv");
+    const reader = new FileReader();
+    reader.onerror = () => setSnError("Could not read the file.");
+
+    if (isCSV) {
+      reader.onload = (ev) => {
+        try {
+          const text = ev.target?.result as string;
+          const parsed = parseCSVLot(text, importLot.trim());
+          if (parsed.length === 0) { setSnError("No valid items found in the file."); return; }
+          setParsedItems(parsed);
+          setImportSummary(buildImportSummary(parsed));
+          if (plData) setCrossRefChecks(buildCrossRefChecks(plData, parsed));
+        } catch (err) {
+          setSnError(`Parse error: ${err instanceof Error ? err.message : "Unknown error"}`);
+        }
+      };
+      reader.readAsText(file);
+    } else {
+      reader.onload = (ev) => {
+        try {
+          const parsed = parseExcelLot(ev.target?.result as ArrayBuffer, importLot.trim());
+          if (parsed.length === 0) { setSnError("No valid items found in the file."); return; }
+          setParsedItems(parsed);
+          setImportSummary(buildImportSummary(parsed));
+          if (plData) setCrossRefChecks(buildCrossRefChecks(plData, parsed));
+        } catch (err) {
+          setSnError(`Parse error: ${err instanceof Error ? err.message : "Unknown error"}`);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+    e.target.value = "";
+  }
+
+  async function handleImportConfirm() {
+    if (!parsedItems) return;
+    const lot = importLot.trim();
+    const clientId = importClientId !== "none" ? importClientId : undefined;
+    const supabase = createClient();
+
+    let docxPath: string | null = null;
+    let snPath: string | null = null;
+
+    if (docxFile) {
+      const path = `${lot}/${lot}_packing_list.docx`;
+      const { error } = await supabase.storage.from("lot-documents").upload(path, docxFile, { upsert: true });
+      if (error) toast.error(`Could not save packing list: ${error.message}`);
+      else docxPath = path;
+    }
+    if (snFile) {
+      const ext = snFile.name.toLowerCase().endsWith(".csv") ? "csv" : "xlsx";
+      const path = `${lot}/${lot}_serial_numbers.${ext}`;
+      const { error } = await supabase.storage.from("lot-documents").upload(path, snFile, { upsert: true });
+      if (error) toast.error(`Could not save serial number file: ${error.message}`);
+      else snPath = path;
+    }
+
+    const orderId = importOrderId !== "none" ? importOrderId : undefined;
+    await createLotImport.mutateAsync({
+      lot_number: lot,
+      ...(docxPath && { docx_path: docxPath }),
+      ...(snPath && { xlsx_path: snPath }),
+      item_count: parsedItems.length,
+      ...(clientId && { client_id: clientId }),
+      ...(orderId && { production_order_id: orderId }),
+      lot_status: "AT_FACTORY",
+    });
+
+    const itemsWithClient = parsedItems.map((item) => ({
+      ...item,
+      location: "GBX" as const,
+      ...(clientId && { client_id: clientId }),
+    }));
+    await bulkCreate.mutateAsync(itemsWithClient);
+    setImportOpen(false);
+  }
+
+  async function handleDownload(lotImport: LotImport, type: "docx" | "xlsx") {
+    const path = type === "docx" ? lotImport.docx_path : lotImport.xlsx_path;
+    if (!path) return;
+    const supabase = createClient();
+    const { data, error } = await supabase.storage.from("lot-documents").createSignedUrl(path, 300);
+    if (error || !data?.signedUrl) { toast.error("Could not generate download link"); return; }
+    window.open(data.signedUrl, "_blank");
+  }
+
+  function toggleApproval(lot: LotImport, field: "pl_approved" | "serial_approved") {
+    const current = field === "pl_approved" ? (lot.pl_approved ?? false) : (lot.serial_approved ?? false);
+    updateLotImport.mutate({ id: lot.id, updates: { [field]: !current } });
+  }
+
+  function handleStatusChange(lot: LotImport, status: LotStatus) {
+    updateLotImport.mutate({ id: lot.id, updates: { lot_status: status } });
+  }
+
+  const allPlPassed = plChecks?.every((c) => c.passed) ?? false;
+  const isImporting = bulkCreate.isPending || createLotImport.isPending;
+
+  const summaryTotals = importSummary
+    ? Object.values(importSummary).reduce((acc, v) => ({ added: acc.added + v.added, bad: acc.bad + v.bad, manual: acc.manual + v.manual }), { added: 0, bad: 0, manual: 0 })
+    : null;
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-zinc-100">Lots</h1>
+          <p className="text-zinc-500 text-sm mt-0.5">{lotImports.length > 0 ? `${lotImports.length} lot${lotImports.length === 1 ? "" : "s"} imported` : "No lots imported yet"}</p>
+        </div>
+        <Button variant="outline" onClick={openImport} className="border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 gap-2">
+          <FileSpreadsheet className="h-4 w-4" />
+          Import LOT
+        </Button>
+      </div>
+
+      {/* Lots Table */}
+      <div className="rounded-lg border border-zinc-800 overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow className="border-zinc-800 hover:bg-transparent">
+              <TableHead className="text-zinc-500 w-12">#</TableHead>
+              <TableHead className="text-zinc-500">LOT Name</TableHead>
+              <TableHead className="text-zinc-500">Date Created</TableHead>
+              <TableHead className="text-zinc-500 text-center">PL Approved</TableHead>
+              <TableHead className="text-zinc-500 text-center">Serial Approved</TableHead>
+              <TableHead className="text-zinc-500">Status</TableHead>
+              <TableHead className="text-zinc-500">Production Order</TableHead>
+              <TableHead className="text-zinc-500">Client</TableHead>
+              <TableHead className="text-zinc-500 text-right">Items</TableHead>
+              <TableHead className="text-zinc-500">Files</TableHead>
+              <TableHead className="w-10" />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {lotImports.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={10} className="text-center text-zinc-500 py-12">
+                  No lots yet. Click &quot;Import LOT&quot; to get started.
+                </TableCell>
+              </TableRow>
+            ) : lotImports.map((lot, i) => {
+              const plApproved = lot.pl_approved ?? false;
+              const serialApproved = lot.serial_approved ?? false;
+              const lotStatus: LotStatus = lot.lot_status ?? "AT_FACTORY";
+              return (
+                <TableRow key={lot.id} className="border-zinc-800 hover:bg-zinc-800/50">
+                  <TableCell className="text-zinc-500 text-sm">{i + 1}</TableCell>
+                  <TableCell className="text-zinc-100 font-mono font-medium text-sm">{lot.lot_number}</TableCell>
+                  <TableCell className="text-zinc-400 text-sm">{formatDate(lot.created_at)}</TableCell>
+                  <TableCell className="text-center">
+                    <button
+                      onClick={() => toggleApproval(lot, "pl_approved")}
+                      className={`w-6 h-6 rounded flex items-center justify-center mx-auto transition-colors ${plApproved ? "bg-green-500/20 text-green-400 hover:bg-green-500/30" : "bg-zinc-800 text-zinc-600 hover:bg-zinc-700 hover:text-zinc-400"}`}
+                      title={plApproved ? "PL Approved — click to revoke" : "Click to approve PL"}
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                    </button>
+                  </TableCell>
+                  <TableCell className="text-center">
+                    <button
+                      onClick={() => toggleApproval(lot, "serial_approved")}
+                      className={`w-6 h-6 rounded flex items-center justify-center mx-auto transition-colors ${serialApproved ? "bg-green-500/20 text-green-400 hover:bg-green-500/30" : "bg-zinc-800 text-zinc-600 hover:bg-zinc-700 hover:text-zinc-400"}`}
+                      title={serialApproved ? "Serial Approved — click to revoke" : "Click to approve serials"}
+                    >
+                      <CheckCircle2 className="h-4 w-4" />
+                    </button>
+                  </TableCell>
+                  <TableCell>
+                    <Select value={lotStatus} onValueChange={(v) => handleStatusChange(lot, v as LotStatus)}>
+                      <SelectTrigger className="h-7 w-36 text-xs bg-transparent border-0 p-0 gap-1 focus:ring-0 [&>svg]:h-3 [&>svg]:w-3">
+                        <Badge className={`${LOT_STATUS_CONFIG[lotStatus].className} cursor-pointer`}>
+                          {LOT_STATUS_CONFIG[lotStatus].label}
+                        </Badge>
+                      </SelectTrigger>
+                      <SelectContent className="bg-zinc-800 border-zinc-700">
+                        {ALL_LOT_STATUSES.map((s) => (
+                          <SelectItem key={s} value={s} className="text-zinc-100 text-xs">
+                            {LOT_STATUS_CONFIG[s].label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </TableCell>
+                  <TableCell className="text-zinc-400 text-sm font-mono">{lot.production_orders?.order_number ?? <span className="text-zinc-600">—</span>}</TableCell>
+                  <TableCell className="text-zinc-400 text-sm">{lot.clients?.name ?? <span className="text-zinc-600">—</span>}</TableCell>
+                  <TableCell className="text-zinc-400 text-sm text-right">{fmt(lot.item_count)}</TableCell>
+                  <TableCell>
+                    <div className="flex items-center gap-2">
+                      {lot.docx_path ? (
+                        <button onClick={() => handleDownload(lot, "docx")} className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-100 transition-colors" title="Download Packing List">
+                          <FileText className="h-3.5 w-3.5" /><span>PL</span><Download className="h-3 w-3" />
+                        </button>
+                      ) : <span className="text-zinc-700 text-xs">No PL</span>}
+                      {lot.xlsx_path && (
+                        <button onClick={() => handleDownload(lot, "xlsx")} className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-100 transition-colors" title="Download Serial Number File">
+                          <FileSpreadsheet className="h-3.5 w-3.5" /><span>S/N</span><Download className="h-3 w-3" />
+                        </button>
+                      )}
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <button
+                      onClick={() => handleDeleteLot(lot)}
+                      disabled={deleteLotImport.isPending}
+                      className="p-1 text-zinc-600 hover:text-red-400 transition-colors disabled:opacity-40"
+                      title={`Delete LOT ${lot.lot_number} and all items`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </div>
+
+      {/* ── Import LOT Dialog ── */}
+      <Dialog open={importOpen} onOpenChange={setImportOpen}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Import LOT</DialogTitle>
+            <p className="text-zinc-500 text-sm">Upload the Packing List to validate, then the serial number file (.csv or .xlsx). Both files are saved as records.</p>
+          </DialogHeader>
+
+          <div className="space-y-5 mt-2">
+            {/* LOT # + Client + Production Order */}
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-zinc-300">LOT #</Label>
+                <Input placeholder="e.g. LOT1" value={importLot} onChange={(e) => setImportLot(e.target.value)} className="bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 font-mono" />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-zinc-300">Client <span className="text-zinc-500 font-normal">(optional)</span></Label>
+                <Select value={importClientId} onValueChange={setImportClientId}>
+                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100"><SelectValue placeholder="Select client..." /></SelectTrigger>
+                  <SelectContent className="bg-zinc-800 border-zinc-700">
+                    <SelectItem value="none" className="text-zinc-400">No client</SelectItem>
+                    {clients.map((c) => <SelectItem key={c.id} value={c.id} className="text-zinc-100">{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-zinc-300">Production Order <span className="text-zinc-500 font-normal">(optional)</span></Label>
+                <Select value={importOrderId} onValueChange={setImportOrderId}>
+                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100"><SelectValue placeholder="Select order..." /></SelectTrigger>
+                  <SelectContent className="bg-zinc-800 border-zinc-700">
+                    <SelectItem value="none" className="text-zinc-400">No order</SelectItem>
+                    {eligibleOrders.map((o) => (
+                      <SelectItem key={o.id} value={o.id} className="text-zinc-100">{o.order_number}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            {importClientId !== "none" && (
+              <p className="text-xs text-blue-400 -mt-2">
+                All items will be assigned to <strong>{clients.find(c => c.id === importClientId)?.name}</strong>
+              </p>
+            )}
+
+            <Separator className="bg-zinc-800" />
+
+            {/* Step 1: Packing List */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold bg-zinc-700 text-zinc-300 rounded-full w-5 h-5 flex items-center justify-center">1</span>
+                <Label className="text-zinc-300">Packing List (.docx) <span className="text-zinc-500 font-normal">— optional but recommended</span></Label>
+                {allPlPassed && <CheckCircle2 className="h-4 w-4 text-green-400" />}
+              </div>
+              <div
+                onClick={() => docxRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); setDocxDragging(true); }}
+                onDragLeave={() => setDocxDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDocxDragging(false);
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) handleDocxChange({ target: { files: e.dataTransfer.files, value: "" } } as unknown as React.ChangeEvent<HTMLInputElement>);
+                }}
+                className={`flex items-center gap-3 px-4 py-3 rounded-lg border-2 border-dashed cursor-pointer transition-colors ${docxDragging ? "border-purple-500 bg-purple-500/10" : "border-zinc-600 hover:border-zinc-400"}`}>
+                <Upload className="h-4 w-4 text-zinc-400 flex-shrink-0" />
+                <span className="text-sm text-zinc-400 truncate">
+                  {plChecks ? `${docxFile?.name} — ${plChecks.filter(c => c.passed).length}/${plChecks.length} checks passed` : docxDragging ? "Drop .docx here" : "Click or drag .docx packing list"}
+                </span>
+                <input ref={docxRef} type="file" accept=".docx" className="hidden" onChange={handleDocxChange} />
+              </div>
+              {plError && <p className="text-red-400 text-xs">{plError}</p>}
+              {plChecks && (
+                <div className="bg-zinc-800/60 rounded-lg p-3 space-y-2">
+                  <p className="text-zinc-500 text-xs font-medium uppercase tracking-wider mb-2">Packing List Validation</p>
+                  {plChecks.map((check, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <CheckIcon passed={check.passed} />
+                      <div className="flex-1 min-w-0">
+                        <span className="text-zinc-300 text-xs font-mono">{check.label}</span>
+                        <span className="text-zinc-500 text-xs ml-2">{check.detail}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <Separator className="bg-zinc-800" />
+
+            {/* Step 2: Serial Number File */}
+            <div className="space-y-3">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold bg-zinc-700 text-zinc-300 rounded-full w-5 h-5 flex items-center justify-center">2</span>
+                <Label className="text-zinc-300">Serial Number File <span className="text-zinc-500 font-normal">(.csv or .xlsx)</span></Label>
+                {parsedItems && !crossRefChecks && <CheckCircle2 className="h-4 w-4 text-green-400" />}
+                {crossRefChecks && crossRefChecks.every(c => c.passed) && <CheckCircle2 className="h-4 w-4 text-green-400" />}
+              </div>
+              <div
+                onClick={() => importLot.trim() && snFileRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); if (importLot.trim()) setSnDragging(true); }}
+                onDragLeave={() => setSnDragging(false)}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setSnDragging(false);
+                  if (!importLot.trim()) return;
+                  const file = e.dataTransfer.files?.[0];
+                  if (file) handleSnFileChange({ target: { files: e.dataTransfer.files, value: "" } } as unknown as React.ChangeEvent<HTMLInputElement>);
+                }}
+                className={`flex items-center gap-3 px-4 py-3 rounded-lg border-2 border-dashed transition-colors ${
+                  !importLot.trim() ? "border-zinc-800 opacity-50 cursor-not-allowed"
+                  : snDragging ? "border-purple-500 bg-purple-500/10 cursor-pointer"
+                  : "border-zinc-600 hover:border-zinc-400 cursor-pointer"
+                }`}>
+                <Upload className="h-4 w-4 text-zinc-400 flex-shrink-0" />
+                <span className="text-sm text-zinc-400 truncate">
+                  {parsedItems ? `${snFile?.name} — ${fmt(parsedItems.length)} items parsed` : snDragging ? "Drop .csv or .xlsx here" : "Click or drag .csv or .xlsx"}
+                </span>
+                <input ref={snFileRef} type="file" accept=".csv,.xlsx" className="hidden" onChange={handleSnFileChange} />
+              </div>
+              {snError && <p className="text-red-400 text-xs">{snError}</p>}
+
+              {/* Import breakdown */}
+              {importSummary && summaryTotals && (
+                <div className="bg-zinc-800/60 rounded-lg p-3">
+                  <p className="text-zinc-500 text-xs font-medium uppercase tracking-wider mb-2">Import Breakdown</p>
+                  <div className="space-y-1">
+                    {Object.entries(importSummary).map(([part, counts]) => (
+                      <div key={part} className="grid grid-cols-[1fr_auto_auto_auto] gap-3 items-center">
+                        <span className="text-zinc-300 text-xs font-mono truncate">{part}</span>
+                        <span className="text-zinc-400 text-xs">{fmt(counts.added)} added</span>
+                        {counts.bad > 0 && <span className="text-red-400 text-xs">{counts.bad} bad</span>}
+                        {counts.manual > 0 && <span className="text-purple-400 text-xs">{counts.manual} manual</span>}
+                        {counts.bad === 0 && <span />}
+                        {counts.manual === 0 && <span />}
+                      </div>
+                    ))}
+                    <Separator className="bg-zinc-700 my-2" />
+                    <div className="flex gap-4 text-xs font-medium">
+                      <span className="text-zinc-300">{fmt(summaryTotals.added)} Added</span>
+                      {summaryTotals.bad > 0 && <span className="text-red-400">{fmt(summaryTotals.bad)} Bad</span>}
+                      {summaryTotals.manual > 0 && <span className="text-purple-400">{fmt(summaryTotals.manual)} Manual</span>}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Cross-reference */}
+              {crossRefChecks && (
+                <div className="bg-zinc-800/60 rounded-lg p-3 space-y-2">
+                  <p className="text-zinc-500 text-xs font-medium uppercase tracking-wider mb-2">Cross-Reference vs Packing List <span className="text-zinc-600 normal-case">(ADDED only)</span></p>
+                  {crossRefChecks.map((check, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      <CheckIcon passed={check.passed} />
+                      <div className="flex-1 min-w-0">
+                        <span className="text-zinc-300 text-xs font-mono">{check.label}</span>
+                        <span className={`text-xs ml-2 ${check.passed ? "text-zinc-500" : "text-red-400"}`}>{check.detail}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3 pt-1">
+              <Button type="button" variant="outline" className="flex-1 border-zinc-700 text-zinc-300 hover:bg-zinc-800" onClick={() => setImportOpen(false)}>Cancel</Button>
+              <Button disabled={!parsedItems || isImporting} onClick={handleImportConfirm} className="flex-1 bg-[#16a34a] hover:bg-[#15803d] text-white">
+                {isImporting ? "Saving..." : parsedItems ? `Import ${fmt(parsedItems.length)} Items` : "Import"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

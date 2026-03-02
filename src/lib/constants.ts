@@ -506,15 +506,16 @@ export const MAINBOARD_LAYOUT: MainboardSection[][] = [
 
 export const PRODUCTION_STEP_NAMES = [
   'Component Sourcing',
-  'PCB Assembly',
-  'CM4 Module Install',
-  'Camera Integration',
-  'Antenna Installation',
-  'Power & Cabling',
-  'Enclosure Assembly',
-  'Firmware Flash',
-  'QA Testing',
-  'Final Inspection & Pack',
+  'Camera Assembly and Q&A',
+  'Main Board PCBA',
+  'Main Board Firmware Load',
+  'Main Board Q&A and Assembly',
+  'Final Inspection',
+  'Shipped to GBX Warehouse',
+  'At GBX Warehouse',
+  'At FF Warehouse',
+  'Vessel',
+  'Delivered',
 ] as const;
 
 // ─────────────────────────────────────────────────────────────
