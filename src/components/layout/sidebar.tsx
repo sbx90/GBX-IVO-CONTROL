@@ -11,12 +11,16 @@ import {
   CheckSquare,
   Layers,
   LogOut,
+  Wrench,
+  ChevronRight,
+  FileCode2,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "sonner";
 import { SettingsDialog } from "@/components/layout/settings-dialog";
 import { DeployButton } from "@/components/layout/deploy-button";
@@ -33,6 +37,10 @@ const navItems = [
   { href: "/tickets", icon: TicketIcon, label: "Tickets", badge: true },
 ];
 
+const toolItems = [
+  { href: "/tools/file-converter", icon: FileCode2, label: "LOT-TOOL", description: "Import & create LOTs from factory files" },
+];
+
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
@@ -45,6 +53,9 @@ export function Sidebar() {
   const visibleNavItems = navItems.filter(
     ({ href }) => !profile?.role || canAccess(profile.role, href)
   );
+
+  const canAccessTools = !profile?.role || canAccess(profile.role, "/tools");
+  const isToolsActive = pathname.startsWith("/tools");
 
   useEffect(() => {
     const supabase = createClient();
@@ -65,7 +76,6 @@ export function Sidebar() {
 
     loadData();
 
-    // Realtime subscription for ticket badge count
     const channel = supabase
       .channel("sidebar-tickets")
       .on(
@@ -129,6 +139,54 @@ export function Sidebar() {
             </Link>
           );
         })}
+
+        {/* Tools */}
+        {canAccessTools && (
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                className={cn(
+                  "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors w-full",
+                  isToolsActive
+                    ? "bg-[#16a34a]/15 text-[#16a34a]"
+                    : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-100 hover:bg-gray-100 dark:hover:bg-zinc-800"
+                )}
+              >
+                <Wrench className="h-4 w-4 flex-shrink-0" />
+                <span className="flex-1 text-left uppercase">Tools</span>
+                <ChevronRight className="h-3.5 w-3.5 opacity-50" />
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              side="right"
+              align="start"
+              sideOffset={8}
+              className="w-56 p-1.5 bg-zinc-900 border-zinc-700"
+            >
+              <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-2 py-1 mb-0.5">
+                Tools
+              </p>
+              {toolItems.map(({ href, icon: Icon, label, description }) => (
+                <Link
+                  key={href}
+                  href={href}
+                  className={cn(
+                    "flex items-start gap-2.5 px-2 py-2 rounded-md transition-colors",
+                    pathname.startsWith(href)
+                      ? "bg-[#16a34a]/15 text-[#16a34a]"
+                      : "text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800"
+                  )}
+                >
+                  <Icon className="h-4 w-4 flex-shrink-0 mt-0.5 text-zinc-400" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium leading-none">{label}</p>
+                    <p className="text-[10px] text-zinc-500 mt-0.5">{description}</p>
+                  </div>
+                </Link>
+              ))}
+            </PopoverContent>
+          </Popover>
+        )}
       </nav>
 
       <Separator className="bg-gray-200 dark:bg-zinc-800" />

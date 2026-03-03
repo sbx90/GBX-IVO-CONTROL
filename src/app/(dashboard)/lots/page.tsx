@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useMemo } from "react";
 import {
-  FileSpreadsheet, Upload, CheckCircle2, XCircle, Download, FileText, Trash2, AlertTriangle,
+  FileSpreadsheet, Upload, CheckCircle2, XCircle, Download, FileText, Trash2, AlertTriangle, FileCode2,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
@@ -43,8 +43,11 @@ import {
 } from "@/hooks/use-manufactured";
 import { useClients } from "@/hooks/use-clients";
 import { useProductionOrders } from "@/hooks/use-production";
+import { useIssueDefinitions } from "@/hooks/use-issue-definitions";
+import { useKitDefinitions } from "@/hooks/use-kit-definitions";
 import { formatDate } from "@/lib/utils";
-import type { ManufacturedItemStatus, CreateManufacturedItemInput, LotImport, LotStatus } from "@/lib/types/database";
+import type { ManufacturedItemStatus, CreateManufacturedItemInput, LotImport, LotStatus, IssueDefinition } from "@/lib/types/database";
+import type { GBXLotFile } from "@/app/(dashboard)/tools/file-converter/page";
 
 // ─── PL (DOCX) types & parser ──────────────────────────────────────
 
@@ -57,6 +60,10 @@ interface PLRow {
   qtyPerBox: number;
   qtyTotal: number;
   label: string;
+  boxStart: number;
+  boxEnd: number;
+  lotNum: string;
+  totalBoxes: number;
 }
 
 interface PLSummary {
@@ -79,12 +86,40 @@ interface CheckItem {
 
 async function parseDocxPL(buffer: ArrayBuffer): Promise<PLData> {
   const zip = await JSZip.loadAsync(buffer);
-  const xmlStr = await zip.file("word/document.xml")!.async("string");
-  const parser = new DOMParser();
-  const xml = parser.parseFromString(xmlStr, "text/xml");
+
+  // Handle both lower and upper-case path (cross-platform DOCX variations)
+  const docEntry = zip.file("word/document.xml") ?? zip.file("Word/document.xml");
+  if (!docEntry) throw new Error("Invalid DOCX file: word/document.xml not found");
+
+  const xmlStr = await docEntry.async("string");
+  const xml = new DOMParser().parseFromString(xmlStr, "text/xml");
+
+  // Join paragraphs within a cell with space — fixes multi-line content like "LOT#2 43/46 to\n45/46"
+  const cellText = (tc: Element): string =>
+    Array.from(tc.querySelectorAll("p"))
+      .map(p => Array.from(p.querySelectorAll("t")).map(t => t.textContent ?? "").join(""))
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+
+  // Find the main data table: the one with "P/N" in its header row
+  const tables = Array.from(xml.querySelectorAll("tbl"));
+  let mainTable: Element | null = null;
+  for (const tbl of tables) {
+    const firstRow = tbl.querySelector("tr");
+    if (!firstRow) continue;
+    const headers = Array.from(firstRow.querySelectorAll("tc")).map(tc => cellText(tc));
+    if (headers.some(h => /p\/n|part.?num/i.test(h))) { mainTable = tbl; break; }
+  }
+  // Fallback: largest table
+  if (!mainTable && tables.length > 0) {
+    mainTable = tables.reduce<Element>((best, t) =>
+      t.querySelectorAll("tr").length > best.querySelectorAll("tr").length ? t : best
+    , tables[0]);
+  }
 
   const allText = Array.from(xml.querySelectorAll("p"))
-    .map((p) => Array.from(p.querySelectorAll("t")).map((t) => t.textContent).join(""))
+    .map((p) => Array.from(p.querySelectorAll("t")).map((t) => t.textContent ?? "").join(""))
     .filter(Boolean);
 
   const summary: PLSummary = { totalBoxes: 0, totalParts: 0, totalVolume: 0, totalWeight: 0 };
@@ -93,22 +128,40 @@ async function parseDocxPL(buffer: ArrayBuffer): Promise<PLData> {
       const m = line.match(pattern);
       return m ? parseFloat(m[1].replace(/,/g, "")) : null;
     };
-    if (/Total Master Boxes/i.test(line)) summary.totalBoxes = numMatch(/([\d,]+)\s*pcs/) ?? 0;
-    else if (/Total parts/i.test(line)) summary.totalParts = numMatch(/([\d,]+)\s*pcs/) ?? 0;
+    if (/Total Master Boxes/i.test(line)) summary.totalBoxes = numMatch(/([\d,]+)/) ?? 0;
+    else if (/Total\s+(?:parts?|pcs|pieces?|qty|quantities?)/i.test(line)) summary.totalParts = numMatch(/([\d,]+)/) ?? 0;
     else if (/Total Volume/i.test(line)) summary.totalVolume = numMatch(/([\d.]+)\s*m/) ?? 0;
     else if (/Total Weight/i.test(line)) summary.totalWeight = numMatch(/([\d.]+)\s*kg/) ?? 0;
   }
 
-  const tableRows = Array.from(xml.querySelectorAll("tr"));
   const rows: PLRow[] = [];
-  for (let ri = 1; ri < tableRows.length; ri++) {
-    const cells = Array.from(tableRows[ri].querySelectorAll("tc"))
-      .map((tc) => Array.from(tc.querySelectorAll("t")).map((t) => t.textContent ?? "").join("").trim());
-    if (cells.length < 7) continue;
-    const [pn, size, vol, wt, boxes, qtyBox, qtyTotal] = cells;
-    if (!pn || !boxes) continue;
-    const n = (s: string) => parseFloat(s.replace(/[^\d.]/g, "")) || 0;
-    rows.push({ partNumber: pn, size, volumePerBox: n(vol), weightPerBox: n(wt), boxes: n(boxes), qtyPerBox: n(qtyBox), qtyTotal: n(qtyTotal), label: cells[7] ?? "" });
+  if (mainTable) {
+    const tableRows = Array.from(mainTable.querySelectorAll("tr"));
+    // Detect header row dynamically
+    let hdrIdx = 0;
+    for (let i = 0; i < Math.min(tableRows.length, 4); i++) {
+      const cells = Array.from(tableRows[i].querySelectorAll("tc")).map(cellText);
+      if (cells.some(c => /p\/n/i.test(c))) { hdrIdx = i; break; }
+    }
+    for (let ri = hdrIdx + 1; ri < tableRows.length; ri++) {
+      const cells = Array.from(tableRows[ri].querySelectorAll("tc")).map(cellText);
+      if (cells.length < 7) continue;
+      const pn = cells[0].trim();
+      // Skip rows without a valid part number (no dash or underscore = not a P/N)
+      if (!pn || !/[-_]/.test(pn)) continue;
+      const n = (s: string) => parseFloat(s.replace(/[^\d.]/g, "")) || 0;
+      const rawLabel = cells[7] ?? "";
+      const bm = rawLabel.match(/LOT#?\s*(\d+)\s+(\d+)\/(\d+)(?:\s+to\s+(\d+)\/\d+)?/i);
+      rows.push({
+        partNumber: pn, size: cells[1], volumePerBox: n(cells[2]), weightPerBox: n(cells[3]),
+        boxes: n(cells[4]), qtyPerBox: n(cells[5]), qtyTotal: n(cells[6]),
+        label: rawLabel,
+        lotNum:     bm ? bm[1] : "",
+        boxStart:   bm ? parseInt(bm[2]) : 0,
+        totalBoxes: bm ? parseInt(bm[3]) : 0,
+        boxEnd:     bm ? parseInt(bm[4] ?? bm[2]) : 0,
+      });
+    }
   }
   return { summary, rows };
 }
@@ -125,7 +178,7 @@ function buildPLChecklist(pl: PLData): CheckItem[] {
   const calcVol   = pl.rows.reduce((s, r) => s + r.boxes * r.volumePerBox, 0);
   const calcWt    = pl.rows.reduce((s, r) => s + r.boxes * r.weightPerBox, 0);
   checks.push({ label: "Total Master Boxes", passed: calcBoxes === pl.summary.totalBoxes, detail: `${calcBoxes} vs ${pl.summary.totalBoxes} stated` });
-  checks.push({ label: "Total Parts",        passed: calcParts === pl.summary.totalParts,  detail: `${calcParts} vs ${pl.summary.totalParts} stated` });
+  checks.push({ label: "Total Pcs", passed: calcParts === pl.summary.totalParts, detail: `${calcParts} vs ${pl.summary.totalParts} stated` });
   checks.push({ label: "Total Volume",       passed: tol(calcVol, pl.summary.totalVolume, 0.1), detail: `${calcVol.toFixed(3)} m³ vs ${pl.summary.totalVolume} m³ stated` });
   checks.push({ label: "Total Weight",       passed: tol(calcWt,  pl.summary.totalWeight,  5),  detail: `${calcWt.toFixed(0)} kg vs ${pl.summary.totalWeight} kg stated` });
   return checks;
@@ -301,7 +354,15 @@ function parseCSVLot(csvText: string, lotNumber: string): ParsedItem[] {
 
 // ─── Excel parser (XLSX) ───────────────────────────────────────────
 
-function parseExcelLot(buffer: ArrayBuffer, lotNumber: string): ParsedItem[] {
+function matchIssue(comment: string, defs: IssueDefinition[]): string | null {
+  const lower = comment.toLowerCase();
+  for (const def of defs) {
+    if (def.keywords.some(kw => kw.trim() && lower.includes(kw.trim().toLowerCase()))) return def.name;
+  }
+  return null;
+}
+
+function parseExcelLot(buffer: ArrayBuffer, lotNumber: string, issueDefs: IssueDefinition[] = [], knownPartNumbers: string[] = []): ParsedItem[] {
   const wb = XLSX.read(buffer, { type: "array" });
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json<(string | number | null)[]>(ws, { header: 1 });
@@ -325,11 +386,34 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string): ParsedItem[] {
 
   const header = rows[headerIdx] as (string | null)[];
   const componentCols: { col: number; partNumber: string; isRange: boolean }[] = [];
+
+  const matchedCols = new Set<number>();
+
+  if (knownPartNumbers.length > 0) {
+    // Primary: find columns by exact match to known part numbers (any column position)
+    for (let c = 0; c < header.length; c++) {
+      const h = header[c];
+      if (!h || typeof h !== "string") continue;
+      const matched = knownPartNumbers.find(pn => pn.trim().toUpperCase() === h.trim().toUpperCase());
+      if (matched) {
+        componentCols.push({ col: c, partNumber: matched, isRange: matched.toUpperCase().includes("PS") || matched.toUpperCase().includes("CDL") });
+        matchedCols.add(c);
+      }
+    }
+    const unmatched = knownPartNumbers.filter(pn => !componentCols.some(c => c.partNumber === pn));
+    if (unmatched.length > 0) console.warn(`[EXCEL PARSER] Part numbers from kit def not found in Excel:`, unmatched);
+  }
+
+  // Always also scan even columns for part-number-like headers not already matched above
+  // This catches components that aren't in the kit definition (e.g. RCW1 added later)
   for (let c = 0; c < header.length; c += 2) {
+    if (matchedCols.has(c)) continue;
     const h = header[c];
     if (!h || typeof h !== "string") continue;
-    if (h.toUpperCase().includes("RCW")) continue;
-    componentCols.push({ col: c, partNumber: h, isRange: h.toUpperCase().includes("PS") || h.toUpperCase().includes("CDL") });
+    if (h.includes("-") || h.includes("_")) {
+      componentCols.push({ col: c, partNumber: h, isRange: h.toUpperCase().includes("PS") || h.toUpperCase().includes("CDL") });
+      matchedCols.add(c);
+    }
   }
 
   const colLetters = (i: number) => String.fromCharCode(65 + i);
@@ -348,6 +432,31 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string): ParsedItem[] {
   const normalEnd = separatorRow > 0 ? separatorRow : rows.length;
 
   const items: ParsedItem[] = [];
+
+  // Build a map of row → comment text for each odd column (B=1, D=3, F=5, H=7…)
+  // These adjacent columns contain factory comments (e.g. "Not sent", "Failed MB")
+  const colComments = new Map<number, Map<number, string>>();
+  // First pass: expand merged cell ranges
+  const merges: XLSX.Range[] = ((ws as { '!merges'?: XLSX.Range[] })['!merges']) ?? [];
+  for (const merge of merges) {
+    if (merge.s.c % 2 !== 1) continue; // odd columns only
+    const cellAddr = XLSX.utils.encode_cell({ r: merge.s.r, c: merge.s.c });
+    const cell = ws[cellAddr];
+    if (!cell?.v || typeof cell.v !== 'string') continue;
+    if (!colComments.has(merge.s.c)) colComments.set(merge.s.c, new Map());
+    const colMap = colComments.get(merge.s.c)!;
+    for (let mr = merge.s.r; mr <= merge.e.r; mr++) colMap.set(mr, cell.v);
+  }
+  // Second pass: catch non-merged text cells in odd columns
+  for (const key of Object.keys(ws).filter(k => /^[A-Z]+\d+$/.test(k))) {
+    const { r, c } = XLSX.utils.decode_cell(key);
+    if (c % 2 !== 1) continue;
+    const cell = ws[key];
+    if (!cell?.v || typeof cell.v !== 'string') continue;
+    if (!colComments.has(c)) colComments.set(c, new Map());
+    const colMap = colComments.get(c)!;
+    if (!colMap.has(r)) colMap.set(r, cell.v); // don't overwrite merged values
+  }
 
   for (const comp of componentCols) {
     if (comp.isRange) {
@@ -385,7 +494,9 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string): ParsedItem[] {
         if (!(typeof val === "number" || /^\d+$/.test(strVal))) continue;
         const status: ManufacturedItemStatus = seenBlank ? "BAD" : "CREATED";
         statusCounts[status]++;
-        items.push({ part_number: comp.partNumber, serial_number: strVal, lot_number: lotNumber, status });
+        const adjComment = colComments.get(comp.col + 1)?.get(r) ?? null;
+        const issue = adjComment ? matchIssue(adjComment, issueDefs) : null;
+        items.push({ part_number: comp.partNumber, serial_number: strVal, lot_number: lotNumber, status, issue });
         if (status === "CREATED") {
           if (firstAddedRow === -1) firstAddedRow = r;
           lastAddedRow = r;
@@ -413,9 +524,56 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string): ParsedItem[] {
   return items;
 }
 
-// ─── Cross-reference ───────────────────────────────────────────────
+// ─── Box label assignment ───────────────────────────────────────────
 
 const normPart = (s: string) => s.replace(/-/g, "_").toUpperCase();
+
+function assignBoxLabels(items: ParsedItem[], plData: PLData | null): ParsedItem[] {
+  if (!plData || plData.rows.length === 0) return items;
+
+  // Group PLRows by normalized part number (multiple rows possible per part)
+  const plByPart = new Map<string, PLRow[]>();
+  for (const row of plData.rows) {
+    if (!row.boxStart || !row.lotNum) continue;
+    const key = normPart(row.partNumber);
+    if (!plByPart.has(key)) plByPart.set(key, []);
+    plByPart.get(key)!.push(row);
+  }
+
+  // Group items by normalized part number
+  const itemsByPart = new Map<string, ParsedItem[]>();
+  for (const item of items) {
+    const key = normPart(item.part_number);
+    if (!itemsByPart.has(key)) itemsByPart.set(key, []);
+    itemsByPart.get(key)!.push(item);
+  }
+
+  const result: ParsedItem[] = [];
+  for (const [key, partItems] of itemsByPart) {
+    const plRows = plByPart.get(key);
+    if (!plRows) { result.push(...partItems); continue; }
+
+    // Sort items by serial number numerically, then assign boxes positionally
+    const sorted = [...partItems].sort((a, b) =>
+      (parseInt(a.serial_number, 10) || 0) - (parseInt(b.serial_number, 10) || 0)
+    );
+    // Sort PLRows by boxStart to handle split-box scenarios
+    const sortedRows = [...plRows].sort((a, b) => a.boxStart - b.boxStart);
+
+    let idx = 0;
+    for (const row of sortedRows) {
+      for (let box = row.boxStart; box <= row.boxEnd && idx < sorted.length; box++) {
+        for (let q = 0; q < row.qtyPerBox && idx < sorted.length; q++, idx++) {
+          sorted[idx] = { ...sorted[idx], box_label: `LOT#${row.lotNum} ${box}/${row.totalBoxes}` };
+        }
+      }
+    }
+    result.push(...sorted);
+  }
+  return result;
+}
+
+// ─── Cross-reference ───────────────────────────────────────────────
 
 function buildCrossRefChecks(pl: PLData, parsedItems: ParsedItem[]): CheckItem[] {
   const countByPart: Record<string, number> = {};
@@ -425,7 +583,6 @@ function buildCrossRefChecks(pl: PLData, parsedItems: ParsedItem[]): CheckItem[]
     countByPart[key] = (countByPart[key] ?? 0) + 1;
   }
   return pl.rows
-    .filter((r) => !r.partNumber.toUpperCase().includes("RCW"))
     .map((row) => {
       const actual = countByPart[normPart(row.partNumber)] ?? 0;
       return { label: row.partNumber, passed: actual === row.qtyTotal, detail: `Parsed: ${actual} | PL expected: ${row.qtyTotal}` };
@@ -474,6 +631,8 @@ export default function LotsPage() {
   const { data: lotImports = [] } = useLotImports();
   const { data: clients = [] } = useClients();
   const { data: allOrders = [] } = useProductionOrders();
+  const { data: issueDefinitions = [] } = useIssueDefinitions();
+  const { data: kitDefinitions = [] } = useKitDefinitions();
   const eligibleOrders = allOrders.filter((o) =>
     o.production_steps?.some((s) => s.step_number === 5 && s.status === "DONE")
   );
@@ -494,6 +653,23 @@ export default function LotsPage() {
   const [importClientId, setImportClientId] = useState("none");
   const [importOrderId, setImportOrderId] = useState("none");
 
+  // Derive expected part numbers from the selected order's kit definitions
+  const expectedPartNumbers = useMemo(() => {
+    if (importOrderId === "none") return [];
+    const order = eligibleOrders.find((o) => o.id === importOrderId);
+    if (!order?.items) return [];
+    const parts: string[] = [];
+    for (const item of order.items) {
+      if (item.type !== "KIT" || !item.reference) continue;
+      const kitDef = kitDefinitions.find((d) => d.name === item.reference);
+      if (!kitDef) continue;
+      for (const comp of kitDef.components) {
+        if (comp.reference && !parts.includes(comp.reference)) parts.push(comp.reference);
+      }
+    }
+    return parts;
+  }, [importOrderId, eligibleOrders, kitDefinitions]);
+
   // PL
   const [plChecks, setPlChecks] = useState<CheckItem[] | null>(null);
   const [plData, setPlData] = useState<PLData | null>(null);
@@ -512,12 +688,75 @@ export default function LotsPage() {
   const [snFile, setSnFile] = useState<File | null>(null);
   const [snDragging, setSnDragging] = useState(false);
   const snFileRef = useRef<HTMLInputElement>(null);
+  const gbxRef = useRef<HTMLInputElement>(null);
+  const [gbxDragging, setGbxDragging] = useState(false);
 
   function openImport() {
     setPlChecks(null); setPlData(null); setPlError(""); setDocxFile(null);
     setParsedItems(null); setImportSummary(null); setCrossRefChecks(null); setSnError(""); setSnFile(null);
     setImportLot(""); setImportClientId("none"); setImportOrderId("none");
     setImportOpen(true);
+  }
+
+  function handleGBXFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onerror = () => toast.error("Could not read the GBX file.");
+    reader.onload = (ev) => {
+      try {
+        const gbx = JSON.parse(ev.target?.result as string) as GBXLotFile;
+        if (gbx.gbx_version !== "1" || !gbx.items) throw new Error("Invalid GBX file format.");
+
+        // Populate all dialog state from the GBX file
+        setImportLot(gbx.lot_number);
+
+        if (gbx.packing_list) {
+          const plData: PLData = {
+            summary: {
+              totalBoxes: gbx.packing_list.summary.total_boxes,
+              totalParts: gbx.packing_list.summary.total_parts,
+              totalVolume: gbx.packing_list.summary.total_volume,
+              totalWeight: gbx.packing_list.summary.total_weight,
+            },
+            rows: gbx.packing_list.rows.map(r => ({
+              partNumber: r.part_number, size: r.size,
+              volumePerBox: r.volume_per_box, weightPerBox: r.weight_per_box,
+              boxes: r.boxes, qtyPerBox: r.qty_per_box, qtyTotal: r.qty_total,
+              label: r.box_label, boxStart: r.box_start, boxEnd: r.box_end,
+              lotNum: r.lot_num, totalBoxes: r.total_boxes,
+            })),
+          };
+          setPlData(plData);
+          setPlChecks(buildPLChecklist(plData));
+          const parsed = gbx.items.map(i => ({
+            part_number: i.part_number, serial_number: i.serial_number,
+            lot_number: i.lot_number, status: i.status as ManufacturedItemStatus,
+            box_label: i.box_label, issue: i.issue,
+          }));
+          setParsedItems(parsed);
+          setImportSummary(buildImportSummary(parsed));
+          setCrossRefChecks(buildCrossRefChecks(plData, parsed));
+          checkForDuplicates(parsed);
+        } else {
+          const parsed = gbx.items.map(i => ({
+            part_number: i.part_number, serial_number: i.serial_number,
+            lot_number: i.lot_number, status: i.status as ManufacturedItemStatus,
+            box_label: i.box_label, issue: i.issue,
+          }));
+          setParsedItems(parsed);
+          setImportSummary(buildImportSummary(parsed));
+          checkForDuplicates(parsed);
+        }
+
+        setPlError(""); setSnError("");
+        toast.success(`GBX file loaded — ${gbx.items.length} items ready to import`);
+      } catch (err) {
+        toast.error(`GBX parse error: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
   }
 
   function handleDocxChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -534,7 +773,10 @@ export default function LotsPage() {
         setPlData(pl);
         setPlChecks(buildPLChecklist(pl));
       } catch (err) {
-        setPlError(`Parse error: ${err instanceof Error ? err.message : "Unknown error"}`);
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("[DOCX PARSE ERROR]", err);
+        setPlError(`Parse error: ${msg}`);
+        toast.error(`DOCX parse error: ${msg}`);
       }
     };
     reader.readAsArrayBuffer(file);
@@ -582,8 +824,9 @@ export default function LotsPage() {
       reader.onload = (ev) => {
         try {
           const text = ev.target?.result as string;
-          const parsed = parseCSVLot(text, importLot.trim());
-          if (parsed.length === 0) { setSnError("No valid items found in the file."); return; }
+          const raw = parseCSVLot(text, importLot.trim());
+          if (raw.length === 0) { setSnError("No valid items found in the file."); return; }
+          const parsed = assignBoxLabels(raw, plData);
           setParsedItems(parsed);
           setImportSummary(buildImportSummary(parsed));
           if (plData) setCrossRefChecks(buildCrossRefChecks(plData, parsed));
@@ -596,8 +839,9 @@ export default function LotsPage() {
     } else {
       reader.onload = (ev) => {
         try {
-          const parsed = parseExcelLot(ev.target?.result as ArrayBuffer, importLot.trim());
-          if (parsed.length === 0) { setSnError("No valid items found in the file."); return; }
+          const raw = parseExcelLot(ev.target?.result as ArrayBuffer, importLot.trim(), issueDefinitions, expectedPartNumbers);
+          if (raw.length === 0) { setSnError("No valid items found in the file."); return; }
+          const parsed = assignBoxLabels(raw, plData);
           setParsedItems(parsed);
           setImportSummary(buildImportSummary(parsed));
           if (plData) setCrossRefChecks(buildCrossRefChecks(plData, parsed));
@@ -694,7 +938,7 @@ export default function LotsPage() {
       </div>
 
       {/* Lots Table */}
-      <div className="rounded-lg border border-zinc-800 overflow-hidden">
+      <div className="rounded-lg border border-zinc-800 overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow className="border-zinc-800 hover:bg-transparent">
@@ -707,14 +951,13 @@ export default function LotsPage() {
               <TableHead className="text-zinc-500">Production Order</TableHead>
               <TableHead className="text-zinc-500">Client</TableHead>
               <TableHead className="text-zinc-500 text-right">Items</TableHead>
-              <TableHead className="text-zinc-500">Files</TableHead>
               <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
           <TableBody>
             {lotImports.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} className="text-center text-zinc-500 py-12">
+                <TableCell colSpan={9} className="text-center text-zinc-500 py-12">
                   No lots yet. Click &quot;Import LOT&quot; to get started.
                 </TableCell>
               </TableRow>
@@ -765,20 +1008,6 @@ export default function LotsPage() {
                   <TableCell className="text-zinc-400 text-sm">{lot.clients?.name ?? <span className="text-zinc-600">—</span>}</TableCell>
                   <TableCell className="text-zinc-400 text-sm text-right">{fmt(lot.item_count)}</TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-2">
-                      {lot.docx_path ? (
-                        <button onClick={() => handleDownload(lot, "docx")} className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-100 transition-colors" title="Download Packing List">
-                          <FileText className="h-3.5 w-3.5" /><span>PL</span><Download className="h-3 w-3" />
-                        </button>
-                      ) : <span className="text-zinc-700 text-xs">No PL</span>}
-                      {lot.xlsx_path && (
-                        <button onClick={() => handleDownload(lot, "xlsx")} className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-100 transition-colors" title="Download Serial Number File">
-                          <FileSpreadsheet className="h-3.5 w-3.5" /><span>S/N</span><Download className="h-3 w-3" />
-                        </button>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell>
                     <button
                       onClick={() => handleDeleteLot(lot)}
                       disabled={deleteLotImport.isPending}
@@ -804,6 +1033,34 @@ export default function LotsPage() {
           </DialogHeader>
 
           <div className="space-y-5 mt-2">
+            {/* GBX Quick Import */}
+            <div
+              onClick={() => gbxRef.current?.click()}
+              onDragOver={e => { e.preventDefault(); setGbxDragging(true); }}
+              onDragLeave={() => setGbxDragging(false)}
+              onDrop={e => {
+                e.preventDefault(); setGbxDragging(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file) handleGBXFileChange({ target: { files: e.dataTransfer.files, value: "" } } as unknown as React.ChangeEvent<HTMLInputElement>);
+              }}
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg border-2 border-dashed cursor-pointer transition-colors ${
+                gbxDragging ? "border-[#16a34a] bg-[#16a34a]/10" : "border-zinc-700 hover:border-[#16a34a]/60 hover:bg-[#16a34a]/5"
+              }`}
+            >
+              <FileCode2 className="h-4 w-4 text-[#16a34a] flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-zinc-300">Have a GBX file?</p>
+                <p className="text-xs text-zinc-500">Click or drag a <span className="font-mono">_gbx.json</span> file — auto-fills all steps</p>
+              </div>
+              <input ref={gbxRef} type="file" accept=".json" className="hidden" onChange={handleGBXFileChange} />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Separator className="flex-1 bg-zinc-800" />
+              <span className="text-zinc-600 text-xs px-1">or process files manually</span>
+              <Separator className="flex-1 bg-zinc-800" />
+            </div>
+
             {/* LOT # + Client + Production Order */}
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5">

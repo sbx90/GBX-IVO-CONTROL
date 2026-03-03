@@ -20,6 +20,8 @@ import {
   Eye,
   EyeOff,
   Package,
+  AlertTriangle,
+  Ruler,
 } from "lucide-react";
 import {
   Dialog,
@@ -38,7 +40,18 @@ import {
   useUpdateClient,
   useDeleteClient,
 } from "@/hooks/use-clients";
-import type { Client, KitDefinition, KitDefinitionComponent, ComponentType } from "@/lib/types/database";
+import type { Client, KitDefinition, KitDefinitionComponent, ComponentType, IssueDefinition, ProductDimension } from "@/lib/types/database";
+import {
+  useProductDimensions,
+  useUpsertProductDimension,
+  useDeleteProductDimension,
+} from "@/hooks/use-product-dimensions";
+import {
+  useIssueDefinitions,
+  useCreateIssueDefinition,
+  useUpdateIssueDefinition,
+  useDeleteIssueDefinition,
+} from "@/hooks/use-issue-definitions";
 import {
   useKitDefinitions,
   useCreateKitDefinition,
@@ -64,7 +77,7 @@ import {
 } from "@/app/actions/users";
 import { toast } from "sonner";
 
-type Tab = "appearance" | "clients" | "users" | "deployment" | "kit_definition";
+type Tab = "appearance" | "clients" | "users" | "deployment" | "kit_definition" | "issues" | "pdd";
 
 const ROLE_BADGE: Record<UserRole, string> = {
   admin: "bg-[#16a34a]/15 text-[#16a34a]",
@@ -992,6 +1005,396 @@ function KitDefinitionTab() {
   );
 }
 
+// ─── Issue Definitions Tab ──────────────────────────────────────
+function IssueDefinitionsTab() {
+  const { data: definitions, isLoading } = useIssueDefinitions();
+  const createDef = useCreateIssueDefinition();
+  const updateDef = useUpdateIssueDefinition();
+  const deleteDef = useDeleteIssueDefinition();
+  const [showForm, setShowForm] = useState(false);
+  const [editingDef, setEditingDef] = useState<IssueDefinition | null>(null);
+  const [name, setName] = useState("");
+  const [keywordsRaw, setKeywordsRaw] = useState("");
+
+  function openAdd() { setName(""); setKeywordsRaw(""); setEditingDef(null); setShowForm(true); }
+  function openEdit(def: IssueDefinition) { setName(def.name); setKeywordsRaw(def.keywords.join(", ")); setEditingDef(def); setShowForm(true); }
+  function closeForm() { setShowForm(false); setEditingDef(null); setName(""); setKeywordsRaw(""); }
+
+  function handleSave() {
+    const trimmedName = name.trim();
+    if (!trimmedName) return;
+    const keywords = keywordsRaw.split(",").map(k => k.trim()).filter(Boolean);
+    if (editingDef) {
+      updateDef.mutate({ id: editingDef.id, updates: { name: trimmedName, keywords } }, { onSuccess: closeForm });
+    } else {
+      createDef.mutate({ name: trimmedName, keywords }, { onSuccess: closeForm });
+    }
+  }
+
+  function handleDelete(def: IssueDefinition) {
+    if (!confirm(`Delete issue definition "${def.name}"?`)) return;
+    deleteDef.mutate(def.id);
+  }
+
+  const isSaving = createDef.isPending || updateDef.isPending;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between pr-10">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-zinc-100">Issue Definitions</h3>
+          <p className="text-xs text-gray-500 dark:text-zinc-500 mt-0.5">
+            Define issue categories matched against LOT import comments
+          </p>
+        </div>
+        {!showForm && (
+          <Button size="sm" onClick={openAdd} className="h-8 bg-[#16a34a] hover:bg-[#15803d] text-white">
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            Add Definition
+          </Button>
+        )}
+      </div>
+
+      {showForm && (
+        <div className="border border-zinc-700 rounded-lg p-4 space-y-3 bg-zinc-800/40">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-zinc-400">Issue Name</Label>
+            <Input
+              value={name}
+              onChange={e => setName(e.target.value)}
+              placeholder="e.g. Not Sent, Factory Failure"
+              className="h-8 text-sm bg-zinc-800 border-zinc-700"
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-zinc-400">Keywords <span className="text-zinc-600">(comma-separated, case-insensitive)</span></Label>
+            <Input
+              value={keywordsRaw}
+              onChange={e => setKeywordsRaw(e.target.value)}
+              placeholder="e.g. not sent, pending, hold"
+              className="h-8 text-sm bg-zinc-800 border-zinc-700"
+            />
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={handleSave} disabled={isSaving || !name.trim()} className="h-7 bg-[#16a34a] hover:bg-[#15803d] text-white">
+              {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
+              {editingDef ? "Save" : "Create"}
+            </Button>
+            <Button size="sm" variant="ghost" onClick={closeForm} className="h-7 text-zinc-400">
+              <X className="h-3.5 w-3.5" />
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-0.5">
+        {isLoading ? (
+          <div className="py-8 text-center text-sm text-zinc-500">Loading definitions...</div>
+        ) : !definitions || definitions.length === 0 ? (
+          <div className="py-8 text-center">
+            <AlertTriangle className="h-8 w-8 mx-auto text-zinc-600 mb-2" />
+            <p className="text-sm text-zinc-500">No issue definitions yet</p>
+            <p className="text-xs text-zinc-600 mt-1">Add definitions to match factory comments during LOT import</p>
+          </div>
+        ) : (
+          definitions.map((def) => (
+            <div key={def.id} className="flex items-start gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800/60 group transition-colors">
+              <div className="h-8 w-8 rounded-full bg-red-500/15 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <AlertTriangle className="h-3.5 w-3.5 text-red-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-zinc-100">{def.name}</p>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {def.keywords.length === 0 ? (
+                    <span className="text-xs text-zinc-600">No keywords</span>
+                  ) : (
+                    def.keywords.map((kw, i) => (
+                      <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-700 text-zinc-400 font-mono">{kw}</span>
+                    ))
+                  )}
+                </div>
+              </div>
+              <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  onClick={() => openEdit(def)}
+                  className="p-1.5 rounded-md hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 transition-colors"
+                  title="Edit"
+                >
+                  <Pencil className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  onClick={() => handleDelete(def)}
+                  disabled={deleteDef.isPending}
+                  className="p-1.5 rounded-md hover:bg-red-900/20 text-zinc-500 hover:text-red-400 transition-colors"
+                  title="Delete"
+                >
+                  {deleteDef.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                </button>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Product Dimension Definitions Tab ─────────────────────────
+type DraftDim = {
+  part_number: string;
+  size_cm: string;
+  volume_m3: string;
+  weight_kg: string;
+  boxes_qty: string;
+  qty_per_box: string;
+};
+
+const EMPTY_DRAFT: DraftDim = {
+  part_number: "",
+  size_cm: "",
+  volume_m3: "",
+  weight_kg: "",
+  boxes_qty: "",
+  qty_per_box: "",
+};
+
+function dimToDraft(d: ProductDimension): DraftDim {
+  return {
+    part_number: d.part_number,
+    size_cm: d.size_cm ?? "",
+    volume_m3: d.volume_m3 != null ? String(d.volume_m3) : "",
+    weight_kg: d.weight_kg != null ? String(d.weight_kg) : "",
+    boxes_qty: d.boxes_qty != null ? String(d.boxes_qty) : "",
+    qty_per_box: d.qty_per_box != null ? String(d.qty_per_box) : "",
+  };
+}
+
+function ProductDimensionsTab() {
+  const { data: dimensions = [], isLoading } = useProductDimensions();
+  const upsert = useUpsertProductDimension();
+  const deleteDim = useDeleteProductDimension();
+
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState<DraftDim>(EMPTY_DRAFT);
+
+  function startAdd() {
+    setDraft(EMPTY_DRAFT);
+    setEditingId("new");
+  }
+
+  function startEdit(d: ProductDimension) {
+    setDraft(dimToDraft(d));
+    setEditingId(d.id);
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setDraft(EMPTY_DRAFT);
+  }
+
+  function patchDraft(key: keyof DraftDim, value: string) {
+    setDraft(prev => ({ ...prev, [key]: value }));
+  }
+
+  function handleSave() {
+    const pn = draft.part_number.trim();
+    if (!pn) return;
+    upsert.mutate(
+      {
+        part_number: pn,
+        size_cm: draft.size_cm.trim() || null,
+        volume_m3: draft.volume_m3 ? parseFloat(draft.volume_m3) : null,
+        weight_kg: draft.weight_kg ? parseFloat(draft.weight_kg) : null,
+        boxes_qty: draft.boxes_qty ? parseInt(draft.boxes_qty, 10) : null,
+        qty_per_box: draft.qty_per_box ? parseInt(draft.qty_per_box, 10) : null,
+      },
+      { onSuccess: cancelEdit }
+    );
+  }
+
+  function handleDelete(d: ProductDimension) {
+    if (!confirm(`Delete dimensions for "${d.part_number}"?`)) return;
+    deleteDim.mutate(d.id);
+  }
+
+  const isSaving = upsert.isPending;
+
+  const inputCls = "h-7 px-1.5 text-xs bg-zinc-800 border border-zinc-600 rounded text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-[#16a34a] w-full";
+
+  function EditRow({ onSave, onCancel }: { onSave: () => void; onCancel: () => void }) {
+    return (
+      <tr className="border-b border-zinc-800 bg-zinc-800/40">
+        <td className="px-2 py-1.5 w-48">
+          <Input
+            value={draft.part_number}
+            onChange={e => patchDraft("part_number", e.target.value)}
+            placeholder="GBXIVO-IMB_..."
+            className={inputCls}
+            autoFocus
+          />
+        </td>
+        <td className="px-2 py-1.5 w-28">
+          <Input
+            value={draft.size_cm}
+            onChange={e => patchDraft("size_cm", e.target.value)}
+            placeholder="41 x 46 x 41"
+            className={inputCls}
+          />
+        </td>
+        <td className="px-2 py-1.5 w-20">
+          <Input
+            value={draft.volume_m3}
+            onChange={e => patchDraft("volume_m3", e.target.value)}
+            placeholder="0.078"
+            type="number"
+            step="0.001"
+            className={inputCls}
+          />
+        </td>
+        <td className="px-2 py-1.5 w-20">
+          <Input
+            value={draft.weight_kg}
+            onChange={e => patchDraft("weight_kg", e.target.value)}
+            placeholder="12"
+            type="number"
+            step="0.1"
+            className={inputCls}
+          />
+        </td>
+        <td className="px-2 py-1.5 w-16">
+          <Input
+            value={draft.boxes_qty}
+            onChange={e => patchDraft("boxes_qty", e.target.value)}
+            placeholder="11"
+            type="number"
+            className={inputCls}
+          />
+        </td>
+        <td className="px-2 py-1.5 w-16">
+          <Input
+            value={draft.qty_per_box}
+            onChange={e => patchDraft("qty_per_box", e.target.value)}
+            placeholder="12"
+            type="number"
+            className={inputCls}
+          />
+        </td>
+        <td className="px-2 py-1.5">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={onSave}
+              disabled={isSaving || !draft.part_number.trim()}
+              className="flex items-center gap-1 px-2 py-1 rounded bg-[#16a34a] hover:bg-[#15803d] text-white text-xs font-medium disabled:opacity-50 transition-colors"
+            >
+              {isSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+              Save
+            </button>
+            <button
+              onClick={onCancel}
+              className="p-1 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between pr-10">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-zinc-100">Product Dimension Definitions</h3>
+          <p className="text-xs text-gray-500 dark:text-zinc-500 mt-0.5">
+            Foundational size, weight and packaging data per GBX part number
+          </p>
+        </div>
+        {editingId === null && (
+          <Button size="sm" onClick={startAdd} className="h-8 bg-[#16a34a] hover:bg-[#15803d] text-white flex-shrink-0">
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            Add Row
+          </Button>
+        )}
+      </div>
+
+      <div className="rounded-lg border border-zinc-800 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-zinc-800/80 border-b border-zinc-700">
+                <th className="px-3 py-2 text-left font-semibold text-zinc-400 uppercase tracking-wider">GBX P/N</th>
+                <th className="px-3 py-2 text-left font-semibold text-zinc-400 uppercase tracking-wider">Size (cm)</th>
+                <th className="px-3 py-2 text-left font-semibold text-zinc-400 uppercase tracking-wider">Vol (m³)</th>
+                <th className="px-3 py-2 text-left font-semibold text-zinc-400 uppercase tracking-wider">Weight (kg)</th>
+                <th className="px-3 py-2 text-left font-semibold text-zinc-400 uppercase tracking-wider">Boxes</th>
+                <th className="px-3 py-2 text-left font-semibold text-zinc-400 uppercase tracking-wider">Qty/Box</th>
+                <th className="px-2 py-2" />
+              </tr>
+            </thead>
+            <tbody>
+              {isLoading ? (
+                <tr>
+                  <td colSpan={7} className="px-3 py-6 text-center text-zinc-500">Loading...</td>
+                </tr>
+              ) : (
+                <>
+                  {dimensions.map(d =>
+                    editingId === d.id ? (
+                      <EditRow key={d.id} onSave={handleSave} onCancel={cancelEdit} />
+                    ) : (
+                      <tr key={d.id} className="border-b border-zinc-800 hover:bg-zinc-800/40 group transition-colors">
+                        <td className="px-3 py-2 font-mono text-zinc-200 font-medium">{d.part_number}</td>
+                        <td className="px-3 py-2 text-zinc-400">{d.size_cm ?? <span className="text-zinc-700">—</span>}</td>
+                        <td className="px-3 py-2 text-zinc-400">{d.volume_m3 ?? <span className="text-zinc-700">—</span>}</td>
+                        <td className="px-3 py-2 text-zinc-400">{d.weight_kg ?? <span className="text-zinc-700">—</span>}</td>
+                        <td className="px-3 py-2 text-zinc-400">{d.boxes_qty ?? <span className="text-zinc-700">—</span>}</td>
+                        <td className="px-3 py-2 text-zinc-400">{d.qty_per_box ?? <span className="text-zinc-700">—</span>}</td>
+                        <td className="px-2 py-2">
+                          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => startEdit(d)}
+                              className="p-1.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 transition-colors"
+                              title="Edit"
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                            <button
+                              onClick={() => handleDelete(d)}
+                              disabled={deleteDim.isPending}
+                              className="p-1.5 rounded hover:bg-red-900/20 text-zinc-500 hover:text-red-400 transition-colors"
+                              title="Delete"
+                            >
+                              {deleteDim.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  )}
+                  {editingId === "new" && (
+                    <EditRow onSave={handleSave} onCancel={cancelEdit} />
+                  )}
+                  {dimensions.length === 0 && editingId === null && (
+                    <tr>
+                      <td colSpan={7} className="px-3 py-8 text-center">
+                        <Ruler className="h-8 w-8 mx-auto text-zinc-700 mb-2" />
+                        <p className="text-sm text-zinc-500">No product dimensions yet</p>
+                        <p className="text-xs text-zinc-600 mt-1">Add rows to define packaging data per part number</p>
+                      </td>
+                    </tr>
+                  )}
+                </>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Component ────────────────────────────────────────────
 export function SettingsDialog() {
   const [open, setOpen] = useState(false);
@@ -1002,6 +1405,8 @@ export function SettingsDialog() {
     { id: "clients", label: "Clients", icon: Users },
     { id: "users", label: "Team", icon: UserCog },
     { id: "kit_definition", label: "Kit Defs", icon: Package },
+    { id: "issues", label: "Issues", icon: AlertTriangle },
+    { id: "pdd", label: "PDD", icon: Ruler },
     { id: "deployment", label: "Deployment", icon: Globe },
   ];
 
@@ -1013,7 +1418,7 @@ export function SettingsDialog() {
           <span>Settings</span>
         </button>
       </DialogTrigger>
-      <DialogContent className="bg-white dark:bg-zinc-900 border-gray-200 dark:border-zinc-800 text-gray-900 dark:text-zinc-100 w-[49vw] sm:max-w-[49vw] p-0 gap-0">
+      <DialogContent className="bg-white dark:bg-zinc-900 border-gray-200 dark:border-zinc-800 text-gray-900 dark:text-zinc-100 w-[62vw] sm:max-w-[62vw] p-0 gap-0">
         <div className="flex h-[560px] overflow-hidden rounded-[inherit]">
           {/* Left nav */}
           <div className="w-40 flex-shrink-0 border-r border-gray-200 dark:border-zinc-800 p-3 flex flex-col gap-1">
@@ -1045,6 +1450,8 @@ export function SettingsDialog() {
             {activeTab === "clients" && <ClientsTab />}
             {activeTab === "users" && <UsersTab />}
             {activeTab === "kit_definition" && <KitDefinitionTab />}
+            {activeTab === "issues" && <IssueDefinitionsTab />}
+            {activeTab === "pdd" && <ProductDimensionsTab />}
             {activeTab === "deployment" && <DeploymentTab />}
           </div>
         </div>

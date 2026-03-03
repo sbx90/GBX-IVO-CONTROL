@@ -597,4 +597,5 @@ export const PAGE_TITLES: Record<string, string> = {
   '/kits': 'Kits',
   '/tickets': 'Tickets',
   '/production': 'Production',
+  '/tools/file-converter': 'LOT-TOOL',
 };

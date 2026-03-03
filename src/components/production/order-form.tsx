@@ -46,6 +46,7 @@ type FormData = z.infer<typeof schema>;
 export function OrderForm() {
   const [open, setOpen] = useState(false);
   const [targetDate, setTargetDate] = useState<Date | undefined>();
+  const [mfgCode, setMfgCode] = useState("");
 
   // Section toggles
   const [showKit, setShowKit] = useState(false);
@@ -76,6 +77,7 @@ export function OrderForm() {
   function handleReset() {
     reset();
     setTargetDate(undefined);
+    setMfgCode("");
     setShowKit(false);
     setShowComp(false);
     setKitQtys({});
@@ -127,6 +129,7 @@ export function OrderForm() {
       ...data,
       quantity: totalQty || 1,
       items,
+      manufacture_code: mfgCode.trim() || undefined,
       target_date: targetDate ? format(targetDate, "yyyy-MM-dd") : undefined,
     });
 
@@ -347,8 +350,23 @@ export function OrderForm() {
             )}
           </div>
 
-          {/* Target Date + Notes */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* S/N + Target Date + Notes */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-1.5">
+              <Label className="text-zinc-300">
+                S/N Code{" "}
+                <span className="text-zinc-500 font-normal">(YYMM)</span>
+              </Label>
+              <Input
+                type="text"
+                maxLength={4}
+                placeholder="e.g. 2509"
+                value={mfgCode}
+                onChange={(e) => setMfgCode(e.target.value.replace(/\D/g, ""))}
+                className="bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 font-mono"
+              />
+            </div>
+
             <div className="space-y-1.5">
               <Label className="text-zinc-300">
                 Target Date{" "}

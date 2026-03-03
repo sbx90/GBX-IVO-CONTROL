@@ -11,14 +11,14 @@ export interface RoleConfig {
 export const ROLE_CONFIG: Record<UserRole, RoleConfig> = {
   admin: {
     label: 'Admin',
-    allowedRoutes: ['/', '/stock', '/kits', '/tickets', '/production'],
+    allowedRoutes: ['/', '/stock', '/kits', '/tickets', '/production', '/lots', '/manufactured', '/tools'],
     defaultRoute: '/',
     canDeploy: true,
     canAccessSettings: true,
   },
   stock_agent: {
     label: 'Stock Agent',
-    allowedRoutes: ['/stock', '/kits', '/production'],
+    allowedRoutes: ['/stock', '/kits', '/production', '/lots', '/manufactured', '/tools'],
     defaultRoute: '/stock',
     canDeploy: false,
     canAccessSettings: false,
@@ -32,7 +32,7 @@ export const ROLE_CONFIG: Record<UserRole, RoleConfig> = {
   },
   production_agent: {
     label: 'Production Agent',
-    allowedRoutes: ['/stock', '/kits', '/production'],
+    allowedRoutes: ['/stock', '/kits', '/production', '/lots', '/manufactured', '/tools'],
     defaultRoute: '/stock',
     canDeploy: false,
     canAccessSettings: false,

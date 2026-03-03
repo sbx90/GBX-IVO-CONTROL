@@ -169,6 +169,7 @@ export interface ProductionOrder {
   status: ProductionStatus;
   current_step: number;
   items: ProductionOrderItem[] | null;
+  manufacture_code: string | null;
   target_date: string | null;
   notes: string | null;
   created_by: string | null;
@@ -300,6 +301,7 @@ export interface CreateOrderInput {
   order_number: string;
   quantity: number; // derived: sum of item quantities
   items: ProductionOrderItem[];
+  manufacture_code?: string;
   target_date?: string;
   notes?: string;
 }
@@ -345,4 +347,101 @@ export interface ProductUnitFilters {
 export interface AssembledKitFilters {
   status?: AssembledKitStatus | 'ALL';
   search?: string;
+}
+
+export type ManufacturedItemStatus = 'CREATED' | 'IN_PROCESS' | 'IN_TRANSIT' | 'AT_CLIENT' | 'RETURNED' | 'BAD' | 'MANUAL';
+
+export type ManufacturedItemLocation = 'SUPPLIER' | 'GBX' | 'CLIENT';
+
+export interface ManufacturedItem {
+  id: string;
+  part_number: string;
+  serial_number: string;
+  lot_number: string | null;
+  box_label: string | null;
+  production_order_id: string | null;
+  client_id: string | null;
+  status: ManufacturedItemStatus;
+  location: ManufacturedItemLocation | null;
+  issue: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined
+  clients?: { id: string; name: string } | null;
+}
+
+export interface CreateManufacturedItemInput {
+  part_number: string;
+  serial_number: string;
+  lot_number?: string;
+  box_label?: string | null;
+  production_order_id?: string;
+  client_id?: string;
+  status?: ManufacturedItemStatus;
+  location?: ManufacturedItemLocation;
+  issue?: string | null;
+}
+
+export interface IssueDefinition {
+  id: string;
+  name: string;
+  keywords: string[];
+  created_at: string;
+}
+
+export interface CreateIssueDefinitionInput {
+  name: string;
+  keywords: string[];
+}
+
+export interface ProductDimension {
+  id: string;
+  part_number: string;
+  size_cm: string | null;
+  volume_m3: number | null;
+  weight_kg: number | null;
+  boxes_qty: number | null;
+  qty_per_box: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UpsertProductDimensionInput {
+  part_number: string;
+  size_cm?: string | null;
+  volume_m3?: number | null;
+  weight_kg?: number | null;
+  boxes_qty?: number | null;
+  qty_per_box?: number | null;
+}
+
+export type LotStatus = 'DELIVERED' | 'IN_TRANSIT' | 'AT_WAREHOUSE' | 'AT_FACTORY' | 'DELAYED';
+
+export interface LotImport {
+  id: string;
+  lot_number: string;
+  docx_path: string | null;
+  xlsx_path: string | null;
+  item_count: number;
+  client_id: string | null;
+  production_order_id: string | null;
+  lot_status: LotStatus;
+  pl_approved: boolean;
+  serial_approved: boolean;
+  created_at: string;
+  // Joined
+  clients?: { id: string; name: string } | null;
+  production_orders?: { id: string; order_number: string } | null;
+}
+
+export interface CreateLotImportInput {
+  lot_number: string;
+  docx_path?: string;
+  xlsx_path?: string;
+  item_count: number;
+  client_id?: string;
+  production_order_id?: string;
+  lot_status?: LotStatus;
+  pl_approved?: boolean;
+  serial_approved?: boolean;
 }
