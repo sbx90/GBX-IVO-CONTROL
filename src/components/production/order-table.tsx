@@ -42,7 +42,10 @@ function calcTotalExpected(order: ProductionOrder, kitDefs: KitDefinition[]): nu
     if (item.type === "KIT") {
       const def = kitDefs.find((d) => d.name === item.reference);
       if (def) {
-        for (const comp of def.components) total += (comp.quantity ?? 1) * item.quantity;
+        for (const comp of def.components) {
+          if (!comp.reference || comp.reference === "undefined") continue;
+          total += (comp.quantity ?? 1) * item.quantity;
+        }
       } else {
         total += item.quantity;
       }
