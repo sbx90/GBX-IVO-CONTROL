@@ -123,13 +123,14 @@ export function DeployButton() {
             : "Deploy to Live"}
         </span>
         {isActive && (
-          <button
+          <span
+            role="button"
             onClick={(e) => { e.stopPropagation(); setShowLogs((v) => !v); }}
-            className="text-zinc-500 hover:text-zinc-300 transition-colors"
+            className="text-zinc-500 hover:text-zinc-300 transition-colors cursor-pointer"
             title={showLogs ? "Hide logs" : "Show logs"}
           >
             {showLogs ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
-          </button>
+          </span>
         )}
       </button>
 

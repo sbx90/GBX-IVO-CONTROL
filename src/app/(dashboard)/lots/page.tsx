@@ -1359,7 +1359,7 @@ export default function LotsPage() {
                   <TableCell>
                     <div className="flex items-center gap-1">
                       <button
-                        onClick={() => { setEditLot(lot); setAddingForPart(null); setAddCount(""); setAddStartSerial("1"); }}
+                        onClick={() => setEditLot(lot)}
                         className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors"
                         title={`Edit items in LOT ${lot.lot_number}`}
                       >
