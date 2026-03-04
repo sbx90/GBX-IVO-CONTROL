@@ -19,13 +19,6 @@ function AuthErrorHandler() {
       }
     });
 
-    // Listen for refresh token errors
-    const originalFetch = window.fetch;
-    window.fetch = async (...args) => {
-      const res = await originalFetch(...args);
-      return res;
-    };
-
     // Handle invalid refresh token by signing out
     supabase.auth.getSession().then(({ error }) => {
       if (error?.message?.includes("Refresh Token Not Found") ||
