@@ -534,6 +534,7 @@ function parseExcelWithRanges(
   configs: PartRangeConfig[],
   issueDefs: IssueDefinition[],
   log: LogFn,
+  startSerials: Record<string, number> = {},
 ): ParsedItem[] {
   const wb = XLSX.read(buffer, { type: "array" });
   const ws = wb.Sheets[wb.SheetNames[0]];
@@ -626,11 +627,14 @@ function parseExcelWithRanges(
         const n = typeof val === "number" ? val : parseInt(val.toString(), 10);
         if (!isNaN(n) && n > 0) { batches.push(n); totalQty += n; }
       }
-      const pad = String(totalQty).length;
-      for (let i = 1; i <= totalQty; i++) {
+      const firstSerial = (startSerials[config.partNumber] ?? 0) + 1;
+      const lastSerial = firstSerial + totalQty - 1;
+      const pad = Math.max(String(lastSerial).length, 3);
+      for (let i = firstSerial; i <= lastSerial; i++) {
         items.push({ part_number: config.partNumber, serial_number: String(i).padStart(pad, "0"), lot_number: lotNumber, status: "OK", issue: null });
       }
-      log("EXCEL", `    → ${batches.join("+")}=${totalQty} packed items`);
+      if (firstSerial > 1) log("EXCEL", `    → ${batches.join("+")}=${totalQty} packed items (serials ${firstSerial}–${lastSerial}, continuing from existing)`);
+      else log("EXCEL", `    → ${batches.join("+")}=${totalQty} packed items (serials ${firstSerial}–${lastSerial})`);
     } else if (isRange) {
       let count = 0;
       for (let r = startRow; r <= endRow; r++) {
@@ -656,14 +660,12 @@ function parseExcelWithRanges(
       }
 
       // Exception items (rows after endRow in same column, with adjacent comments)
-      let exceptionParsed = 0, exceptionSkipped = 0;
+      let exceptionParsed = 0;
       for (let r = endRow + 1; r < rows.length; r++) {
         const strVal = readSerial(r, col);
         if (!strVal) continue;
         const rawComment = colComments.get(col + 1)?.get(r) ?? null;
         const adjComment = (rawComment && !/^\d+$/.test(rawComment.trim())) ? rawComment : null;
-        // "missing" → skip entirely
-        if (adjComment && /missing/i.test(adjComment)) { exceptionSkipped++; continue; }
         // "taken by you" → MANUAL status
         const status: ManufacturedItemStatus = (adjComment && /taken\s+by\s+you/i.test(adjComment)) ? "MANUAL" : "OK";
         const issue = adjComment ? (matchIssue(adjComment, issueDefs) ?? adjComment) : null;
@@ -674,7 +676,7 @@ function parseExcelWithRanges(
         exceptionParsed++;
       }
 
-      log("EXCEL", `    → ${packed} packed${exceptionParsed > 0 ? `, ${exceptionParsed} exception` : ""}${exceptionSkipped > 0 ? `, ${exceptionSkipped} skipped (missing)` : ""}`);
+      log("EXCEL", `    → ${packed} packed${exceptionParsed > 0 ? `, ${exceptionParsed} exception` : ""}`);
     }
   }
 
@@ -1337,14 +1339,48 @@ export default function FileConverterPage() {
     }
   }
 
-  function handleParseExcel() {
+  async function handleParseExcel() {
     if (!xlsxBuffer) return;
     const lot = lotNumber.trim();
     if (!lot) { setSnError("Enter a LOT # first."); return; }
     setSnError("");
     setParsedItems(null); setImportSummary(null); setCrossRefChecks(null);
     try {
-      const raw = parseExcelWithRanges(xlsxBuffer, lot, partRangeConfigs, issueDefinitions, addLog);
+      // For quantity-mode parts, find the current max serial in the DB so we
+      // continue numbering from where the last LOT left off (avoids overwriting).
+      const quantityParts = partRangeConfigs
+        .filter(c => c.type === "count" || (c.type === "auto" && c.cellRange.trim()))
+        .map(c => c.partNumber)
+        .filter(Boolean);
+
+      const startSerials: Record<string, number> = {};
+      if (quantityParts.length > 0 && selectedOrderId) {
+        const supabase = createClient();
+        // Get all lot numbers already imported for this production order
+        const { data: orderLots } = await supabase
+          .from("lot_imports")
+          .select("lot_number")
+          .eq("production_order_id", selectedOrderId);
+        const orderLotNumbers = (orderLots ?? []).map(l => l.lot_number).filter(Boolean);
+        if (orderLotNumbers.length > 0) {
+          const { data } = await supabase
+            .from("manufactured_items")
+            .select("part_number, serial_number")
+            .in("part_number", quantityParts)
+            .in("lot_number", orderLotNumbers);
+          for (const row of data ?? []) {
+            const n = parseInt(row.serial_number, 10);
+            if (!isNaN(n)) {
+              startSerials[row.part_number] = Math.max(startSerials[row.part_number] ?? 0, n);
+            }
+          }
+          for (const pn of Object.keys(startSerials)) {
+            if (startSerials[pn] > 0) addLog("EXCEL", `${pn}: continuing from serial ${startSerials[pn] + 1} (${startSerials[pn]} existing in this order)`, "warn");
+          }
+        }
+      }
+
+      const raw = parseExcelWithRanges(xlsxBuffer, lot, partRangeConfigs, issueDefinitions, addLog, startSerials);
       if (raw.length === 0) { setSnError("No valid items found — check your cell ranges."); return; }
       const currentPl = plDataRef.current;
       const labeled = assignBoxLabels(raw, currentPl, addLog);
@@ -1481,51 +1517,49 @@ export default function FileConverterPage() {
         <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-5 space-y-5">
 
           {/* LOT # + Order + Client */}
-          <div className="space-y-3">
+          <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <Label className="text-zinc-300">LOT Number</Label>
               <Input
                 placeholder="e.g. LOT2"
                 value={lotNumber}
                 onChange={e => setLotNumber(e.target.value)}
-                className="bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 font-mono max-w-xs"
+                className="bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 font-mono"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label className="text-zinc-300 flex items-center gap-1">
-                  Production Order <span className="text-red-400">*</span>
-                </Label>
-                <Select value={selectedOrderId} onValueChange={setSelectedOrderId}>
-                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100 h-9">
-                    <SelectValue placeholder="Select order…" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-100">
-                    {productionOrders.map(o => (
-                      <SelectItem key={o.id} value={o.id} className="text-zinc-100 focus:bg-zinc-700 focus:text-white">
-                        {o.order_number}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-zinc-300 flex items-center gap-1">
-                  Client <span className="text-red-400">*</span>
-                </Label>
-                <Select value={selectedClientId} onValueChange={setSelectedClientId}>
-                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100 h-9">
-                    <SelectValue placeholder="Select client…" />
-                  </SelectTrigger>
-                  <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-100">
-                    {clients.map(c => (
-                      <SelectItem key={c.id} value={c.id} className="text-zinc-100 focus:bg-zinc-700 focus:text-white">
-                        {c.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+            <div className="space-y-1.5">
+              <Label className="text-zinc-300 flex items-center gap-1">
+                Production Order <span className="text-red-400">*</span>
+              </Label>
+              <Select value={selectedOrderId} onValueChange={setSelectedOrderId}>
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100 h-9">
+                  <SelectValue placeholder="Select order…" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-100">
+                  {productionOrders.map(o => (
+                    <SelectItem key={o.id} value={o.id} className="text-zinc-100 focus:bg-zinc-700 focus:text-white">
+                      {o.order_number}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-zinc-300 flex items-center gap-1">
+                Client <span className="text-red-400">*</span>
+              </Label>
+              <Select value={selectedClientId} onValueChange={setSelectedClientId}>
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100 h-9">
+                  <SelectValue placeholder="Select client…" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-100">
+                  {clients.map(c => (
+                    <SelectItem key={c.id} value={c.id} className="text-zinc-100 focus:bg-zinc-700 focus:text-white">
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 

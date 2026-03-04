@@ -42,13 +42,21 @@ export function useDistinctManufacturedPartNumbers() {
     queryKey: ["manufactured_items", "part_numbers"],
     staleTime: 60_000,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("manufactured_items")
-        .select("part_number")
-        .order("part_number", { ascending: true });
-      if (error) throw error;
-      const unique = [...new Set((data ?? []).map((r: { part_number: string }) => r.part_number))];
-      return unique;
+      const PAGE_SIZE = 1000;
+      const seen = new Set<string>();
+      let page = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("manufactured_items")
+          .select("part_number")
+          .order("part_number", { ascending: true })
+          .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+        if (error) throw error;
+        for (const r of data ?? []) seen.add(r.part_number);
+        if ((data?.length ?? 0) < PAGE_SIZE) break;
+        page++;
+      }
+      return [...seen].sort();
     },
   });
 }
@@ -58,14 +66,22 @@ export function useDistinctManufacturedLotNumbers() {
     queryKey: ["manufactured_items", "lot_numbers"],
     staleTime: 60_000,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("manufactured_items")
-        .select("lot_number")
-        .not("lot_number", "is", null)
-        .order("lot_number", { ascending: true });
-      if (error) throw error;
-      const unique = [...new Set((data ?? []).map((r: { lot_number: string }) => r.lot_number))];
-      return unique;
+      const PAGE_SIZE = 1000;
+      const seen = new Set<string>();
+      let page = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("manufactured_items")
+          .select("lot_number")
+          .not("lot_number", "is", null)
+          .order("lot_number", { ascending: true })
+          .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+        if (error) throw error;
+        for (const r of data ?? []) seen.add(r.lot_number);
+        if ((data?.length ?? 0) < PAGE_SIZE) break;
+        page++;
+      }
+      return [...seen].sort();
     },
   });
 }

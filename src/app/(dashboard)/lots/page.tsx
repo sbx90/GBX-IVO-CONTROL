@@ -48,6 +48,7 @@ import {
   useSubtractLotItems,
   useManufacturedLotCounts,
 } from "@/hooks/use-manufactured";
+import { useProductCatalog } from "@/hooks/use-product-catalog";
 import { useClients } from "@/hooks/use-clients";
 import { useProductionOrders } from "@/hooks/use-production";
 import { useIssueDefinitions } from "@/hooks/use-issue-definitions";
@@ -725,6 +726,8 @@ function fmt(n: number) { return n.toLocaleString(); }
 
 function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () => void }) {
   const { data: partCounts = [], isLoading } = useLotItemCounts(lot?.lot_number ?? null);
+  const { data: catalog = [] } = useProductCatalog();
+  const allPartNumbers = catalog.map((c) => c.part_number);
   const bulkCreate = useBulkCreateManufacturedItems();
   const updateLotImport = useUpdateLotImport();
   const subtractLotItems = useSubtractLotItems();
@@ -733,6 +736,10 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
   const [inputCount, setInputCount] = useState("");
   const [inputStartSerial, setInputStartSerial] = useState("1");
   const [lastAdded, setLastAdded] = useState<{ partNumber: string; count: number } | null>(null);
+  const [showNewPart, setShowNewPart] = useState(false);
+  const [newPartNumber, setNewPartNumber] = useState("");
+  const [newPartCount, setNewPartCount] = useState("");
+  const [newPartStartSerial, setNewPartStartSerial] = useState("1");
 
   function openRow(part: string, mode: "add" | "subtract") {
     setExpanded(expanded?.part === part && expanded.mode === mode ? null : { part, mode });
@@ -786,10 +793,34 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
     });
   }
 
+  function handleAddNew() {
+    if (!lot) return;
+    const pn = newPartNumber.trim().toUpperCase();
+    const count = parseInt(newPartCount, 10);
+    const start = parseInt(newPartStartSerial, 10);
+    if (!pn || isNaN(count) || count <= 0 || isNaN(start)) return;
+    const end = start + count - 1;
+    const pad = Math.max(String(end).length, 3);
+    const items: CreateManufacturedItemInput[] = [];
+    for (let i = start; i <= end; i++) {
+      items.push({ part_number: pn, serial_number: String(i).padStart(pad, "0"), lot_number: lot.lot_number, status: "OK", issue: null, box_label: null });
+    }
+    bulkCreate.mutate(items, {
+      onSuccess: () => {
+        updateLotImport.mutate({ id: lot.id, updates: { item_count: (lot.item_count ?? 0) + items.length } });
+        setLastAdded({ partNumber: pn, count: items.length });
+        setShowNewPart(false);
+        setNewPartNumber("");
+        setNewPartCount("");
+        setNewPartStartSerial("1");
+      },
+    });
+  }
+
   const isPending = bulkCreate.isPending || subtractLotItems.isPending;
 
   return (
-    <Dialog open={!!lot} onOpenChange={(o) => { if (!o) { onClose(); setExpanded(null); setLastAdded(null); } }}>
+    <Dialog open={!!lot} onOpenChange={(o) => { if (!o) { onClose(); setExpanded(null); setLastAdded(null); setShowNewPart(false); setNewPartNumber(""); setNewPartCount(""); setNewPartStartSerial("1"); } }}>
       <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>Edit Items — {lot?.lot_number}</DialogTitle>
@@ -899,6 +930,77 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
                 ))}
               </tbody>
             </table>
+          )}
+        </div>
+
+        {/* ── Add new part number ── */}
+        <div className="border-t border-zinc-800 pt-3 mt-1">
+          {!showNewPart ? (
+            <button
+              onClick={() => setShowNewPart(true)}
+              className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-[#16a34a] transition-colors"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add new part number
+            </button>
+          ) : (
+            <div className="rounded-lg p-3 space-y-2 bg-zinc-800/60 border border-zinc-700">
+              <p className="text-xs font-medium text-zinc-400">New part number</p>
+              <div className="space-y-1.5">
+                <Select value={newPartNumber} onValueChange={setNewPartNumber}>
+                  <SelectTrigger className="h-7 text-xs bg-zinc-700 border-zinc-600 text-zinc-100 font-mono">
+                    <SelectValue placeholder="Select part number…" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-800 border-zinc-700 max-h-60">
+                    {allPartNumbers.map((p) => (
+                      <SelectItem key={p} value={p} className="text-xs font-mono text-zinc-200 focus:bg-zinc-700">
+                        {p}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <div className="flex gap-2 items-end">
+                  <div className="flex-1 space-y-1">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Count</label>
+                    <Input
+                      type="number"
+                      min="1"
+                      placeholder="140"
+                      value={newPartCount}
+                      onChange={(e) => setNewPartCount(e.target.value)}
+                      className="h-7 text-xs bg-zinc-700 border-zinc-600 text-zinc-100"
+                    />
+                  </div>
+                  <div className="flex-1 space-y-1">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Start Serial</label>
+                    <Input
+                      type="number"
+                      min="1"
+                      placeholder="1"
+                      value={newPartStartSerial}
+                      onChange={(e) => setNewPartStartSerial(e.target.value)}
+                      className="h-7 text-xs bg-zinc-700 border-zinc-600 text-zinc-100"
+                    />
+                  </div>
+                  <Button
+                    size="sm"
+                    className="h-7 text-xs shrink-0 bg-[#16a34a] hover:bg-[#15803d] text-white"
+                    onClick={handleAddNew}
+                    disabled={isPending || !newPartNumber.trim() || !newPartCount}
+                  >
+                    {isPending ? "…" : "Add"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs text-zinc-400 shrink-0"
+                    onClick={() => { setShowNewPart(false); setNewPartNumber(""); setNewPartCount(""); setNewPartStartSerial("1"); }}
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </DialogContent>
