@@ -40,12 +40,18 @@ import {
   useUpdateClient,
   useDeleteClient,
 } from "@/hooks/use-clients";
-import type { Client, KitDefinition, KitDefinitionComponent, ComponentType, IssueDefinition, ProductDimension } from "@/lib/types/database";
+import type { Client, KitDefinition, KitDefinitionComponent, IssueDefinition, ProductDimension, ProductCatalogItem } from "@/lib/types/database";
 import {
   useProductDimensions,
   useUpsertProductDimension,
   useDeleteProductDimension,
 } from "@/hooks/use-product-dimensions";
+import {
+  useProductCatalog,
+  useAddProductCatalogItem,
+  useUpdateProductCatalogItem,
+  useDeleteProductCatalogItem,
+} from "@/hooks/use-product-catalog";
 import {
   useIssueDefinitions,
   useCreateIssueDefinition,
@@ -58,7 +64,6 @@ import {
   useUpdateKitDefinition,
   useDeleteKitDefinition,
 } from "@/hooks/use-kit-definitions";
-import { COMPONENT_CONFIG, STOCK_COMPONENT_ORDER } from "@/lib/constants";
 import {
   Select,
   SelectContent,
@@ -701,16 +706,6 @@ function DeploymentTab() {
   );
 }
 
-const PS_VARIANTS = [
-  { key: "ps1" as const, label: "GBXIVO-IMB-PS1" },
-  { key: "ps2" as const, label: "GBXIVO-IMB-PS2" },
-  { key: "ps3" as const, label: "GBXIVO-IMB-PS3" },
-];
-const WIFI_VARIANTS = [
-  { key: "rcw1" as const, label: "GBXIVO-IMB_RCW1" },
-  { key: "rcw2" as const, label: "GBXIVO-IMB_RCW2" },
-];
-
 // ─── Kit Definition Form ────────────────────────────────────────
 function KitDefinitionForm({
   initial,
@@ -723,28 +718,22 @@ function KitDefinitionForm({
 }) {
   const createDef = useCreateKitDefinition();
   const updateDef = useUpdateKitDefinition();
+  const { data: catalog = [], isLoading: isLoadingCatalog } = useProductCatalog();
+
+  const [unlocked, setUnlocked] = useState(!initial);
+  const [pwInput, setPwInput] = useState("");
+  const [pwError, setPwError] = useState(false);
+
   const [name, setName] = useState(initial?.name ?? "");
-  const [compQtys, setCompQtys] = useState<Partial<Record<ComponentType, number>>>(() => {
+
+  // Keyed by part_number (reference)
+  const [pnQtys, setPnQtys] = useState<Record<string, number>>(() => {
     if (!initial) return {};
-    const r: Partial<Record<ComponentType, number>> = {};
+    const r: Record<string, number> = {};
     for (const c of initial.components) {
-      if (c.component_type !== "POWER_SUPPLY" && c.component_type !== "WIFI_ANTENNA") {
-        r[c.component_type] = c.quantity;
-      }
+      r[c.reference] = c.quantity;
     }
     return r;
-  });
-  const [psQtys, setPsQtys] = useState(() => {
-    if (!initial) return { ps1: 0, ps2: 0, ps3: 0 };
-    const find = (ref: string) =>
-      initial.components.find((c) => c.component_type === "POWER_SUPPLY" && c.reference === ref)?.quantity ?? 0;
-    return { ps1: find("GBXIVO-IMB-PS1"), ps2: find("GBXIVO-IMB-PS2"), ps3: find("GBXIVO-IMB-PS3") };
-  });
-  const [wifiQtys, setWifiQtys] = useState(() => {
-    if (!initial) return { rcw1: 0, rcw2: 0 };
-    const find = (ref: string) =>
-      initial.components.find((c) => c.component_type === "WIFI_ANTENNA" && c.reference === ref)?.quantity ?? 0;
-    return { rcw1: find("GBXIVO-IMB_RCW1"), rcw2: find("GBXIVO-IMB_RCW2") };
   });
 
   const isPending = createDef.isPending || updateDef.isPending;
@@ -752,23 +741,9 @@ function KitDefinitionForm({
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
-    const components: KitDefinitionComponent[] = [];
-    for (const type of STOCK_COMPONENT_ORDER) {
-      if (type === "POWER_SUPPLY") {
-        for (const { key, label } of PS_VARIANTS) {
-          if (psQtys[key] > 0)
-            components.push({ component_type: "POWER_SUPPLY", reference: label, quantity: psQtys[key] });
-        }
-      } else if (type === "WIFI_ANTENNA") {
-        for (const { key, label } of WIFI_VARIANTS) {
-          if (wifiQtys[key] > 0)
-            components.push({ component_type: "WIFI_ANTENNA", reference: label, quantity: wifiQtys[key] });
-        }
-      } else {
-        const qty = compQtys[type as ComponentType] ?? 0;
-        if (qty > 0) components.push({ component_type: type as ComponentType, quantity: qty });
-      }
-    }
+    const components: KitDefinitionComponent[] = Object.entries(pnQtys)
+      .filter(([, qty]) => qty > 0)
+      .map(([reference, quantity]) => ({ reference, quantity }));
     if (initial) {
       await updateDef.mutateAsync({ id: initial.id, updates: { name: name.trim(), components } });
     } else {
@@ -778,6 +753,43 @@ function KitDefinitionForm({
   }
 
   const qInput = "w-14 h-7 text-center text-xs bg-white dark:bg-zinc-800 border-gray-200 dark:border-zinc-700 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none";
+
+  if (!unlocked) {
+    return (
+      <div className="mt-2 p-4 rounded-xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800/50 space-y-3">
+        <p className="text-xs font-medium text-zinc-400">Password required to edit kit quantities</p>
+        <Input
+          type="password"
+          placeholder="Enter password"
+          value={pwInput}
+          onChange={(e) => { setPwInput(e.target.value); setPwError(false); }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              if (pwInput === "ivocontrol") { setUnlocked(true); setPwInput(""); }
+              else setPwError(true);
+            }
+          }}
+          className="h-8 text-sm bg-white dark:bg-zinc-800 border-gray-200 dark:border-zinc-700"
+          autoFocus
+        />
+        {pwError && <p className="text-xs text-red-400">Incorrect password</p>}
+        <div className="flex gap-2 justify-end">
+          <Button type="button" variant="ghost" size="sm" onClick={onCancel} className="h-8 text-zinc-400">Cancel</Button>
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 bg-[#16a34a] hover:bg-[#15803d] text-white"
+            onClick={() => {
+              if (pwInput === "ivocontrol") { setUnlocked(true); setPwInput(""); }
+              else setPwError(true);
+            }}
+          >
+            Unlock
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <form
@@ -797,76 +809,39 @@ function KitDefinitionForm({
 
       <div className="space-y-1">
         <p className="text-xs font-medium text-gray-500 dark:text-zinc-500 uppercase tracking-wider mb-2">
-          Components
+          Products
         </p>
-        <div className="space-y-1">
-          {STOCK_COMPONENT_ORDER.map((type) => {
-            if (type === "POWER_SUPPLY") {
+        {isLoadingCatalog ? (
+          <p className="text-xs text-zinc-500 py-2">Loading products...</p>
+        ) : catalog.length === 0 ? (
+          <p className="text-xs text-zinc-500 py-2">No products found. Add them in the PDD tab.</p>
+        ) : (
+          <div className="space-y-1">
+            {catalog.map(({ id, part_number }) => {
+              const qty = pnQtys[part_number] ?? 0;
               return (
-                <div key={type} className="space-y-1">
-                  <p className="text-xs font-medium text-gray-600 dark:text-zinc-400 pt-1">Power Supply</p>
-                  {PS_VARIANTS.map(({ key, label }) => (
-                    <div key={key} className="flex items-center gap-2 pl-3 border-l border-gray-200 dark:border-zinc-700">
-                      <span className="flex-1 text-xs font-mono text-gray-600 dark:text-zinc-400">{label}</span>
-                      <Input
-                        type="number"
-                        value={psQtys[key] === 0 ? "" : psQtys[key]}
-                        placeholder="0"
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value);
-                          setPsQtys((p) => ({ ...p, [key]: isNaN(v) ? 0 : v }));
-                        }}
-                        className={qInput}
-                      />
-                    </div>
-                  ))}
+                <div key={id} className="flex items-center gap-2">
+                  <span className={cn(
+                    "flex-1 text-xs font-mono transition-colors",
+                    qty > 0 ? "text-gray-800 dark:text-zinc-200" : "text-gray-400 dark:text-zinc-500"
+                  )}>
+                    {part_number}
+                  </span>
+                  <Input
+                    type="number"
+                    value={qty === 0 ? "" : qty}
+                    placeholder="0"
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value);
+                      setPnQtys((p) => ({ ...p, [part_number]: isNaN(v) ? 0 : v }));
+                    }}
+                    className={qInput}
+                  />
                 </div>
               );
-            }
-            if (type === "WIFI_ANTENNA") {
-              return (
-                <div key={type} className="space-y-1">
-                  <p className="text-xs font-medium text-gray-600 dark:text-zinc-400 pt-1">WiFi + Cell Antenna</p>
-                  {WIFI_VARIANTS.map(({ key, label }) => (
-                    <div key={key} className="flex items-center gap-2 pl-3 border-l border-gray-200 dark:border-zinc-700">
-                      <span className="flex-1 text-xs font-mono text-gray-600 dark:text-zinc-400">{label}</span>
-                      <Input
-                        type="number"
-                        value={wifiQtys[key] === 0 ? "" : wifiQtys[key]}
-                        placeholder="0"
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value);
-                          setWifiQtys((p) => ({ ...p, [key]: isNaN(v) ? 0 : v }));
-                        }}
-                        className={qInput}
-                      />
-                    </div>
-                  ))}
-                </div>
-              );
-            }
-            const label =
-              type === "MAIN_BOARD"
-                ? "Main Board (Enclosure)"
-                : COMPONENT_CONFIG[type as ComponentType].label;
-            const qty = compQtys[type as ComponentType] ?? 0;
-            return (
-              <div key={type} className="flex items-center gap-2">
-                <span className="flex-1 text-xs text-gray-600 dark:text-zinc-400">{label}</span>
-                <Input
-                  type="number"
-                  value={qty === 0 ? "" : qty}
-                  placeholder="0"
-                  onChange={(e) => {
-                    const v = parseInt(e.target.value);
-                    setCompQtys((p) => ({ ...p, [type as ComponentType]: isNaN(v) ? 0 : v }));
-                  }}
-                  className={qInput}
-                />
-              </div>
-            );
-          })}
-        </div>
+            })}
+          </div>
+        )}
       </div>
 
       <div className="flex gap-2 justify-end pt-1">
@@ -1140,6 +1115,136 @@ function IssueDefinitionsTab() {
   );
 }
 
+// ─── Product Catalog Section (P/N list) ────────────────────────
+function ProductCatalogSection() {
+  const { data: items = [], isLoading } = useProductCatalog();
+  const addItem = useAddProductCatalogItem();
+  const updateItem = useUpdateProductCatalogItem();
+  const deleteItem = useDeleteProductCatalogItem();
+
+  const [editingId, setEditingId] = useState<string | null>(null); // id or "new"
+  const [value, setValue] = useState("");
+
+  function startAdd() { setValue(""); setEditingId("new"); }
+  function startEdit(item: ProductCatalogItem) { setValue(item.part_number); setEditingId(item.id); }
+  function cancel() { setEditingId(null); setValue(""); }
+
+  function handleSave() {
+    const pn = value.trim();
+    if (!pn) return;
+    if (editingId === "new") {
+      addItem.mutate(pn, { onSuccess: cancel });
+    } else if (editingId) {
+      updateItem.mutate({ id: editingId, part_number: pn }, { onSuccess: cancel });
+    }
+  }
+
+  function handleDelete(item: ProductCatalogItem) {
+    if (!confirm(`Delete part number "${item.part_number}"?`)) return;
+    deleteItem.mutate(item.id);
+  }
+
+  const isSaving = addItem.isPending || updateItem.isPending;
+  const inputCls = "h-7 px-2 text-xs bg-zinc-800 border border-zinc-600 rounded text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-[#16a34a] flex-1 font-mono";
+
+  return (
+    <div className="rounded-lg border border-zinc-800 overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 bg-zinc-800/80 border-b border-zinc-700">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">GBX Part Numbers</p>
+        {editingId === null && (
+          <button
+            onClick={startAdd}
+            className="flex items-center gap-1 text-xs text-[#16a34a] hover:text-[#15803d] font-medium transition-colors"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add P/N
+          </button>
+        )}
+      </div>
+
+      <div className="divide-y divide-zinc-800/60">
+        {isLoading ? (
+          <div className="px-3 py-3 text-xs text-zinc-500">Loading...</div>
+        ) : (
+          <>
+            {items.map(item =>
+              editingId === item.id ? (
+                <div key={item.id} className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800/40">
+                  <input
+                    value={value}
+                    onChange={e => setValue(e.target.value)}
+                    onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") cancel(); }}
+                    className={inputCls}
+                    autoFocus
+                  />
+                  <button
+                    onClick={handleSave}
+                    disabled={isSaving || !value.trim()}
+                    className="flex items-center gap-1 px-2 py-1 rounded bg-[#16a34a] hover:bg-[#15803d] text-white text-xs font-medium disabled:opacity-50 transition-colors flex-shrink-0"
+                  >
+                    {isSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                    Save
+                  </button>
+                  <button onClick={cancel} className="p-1 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 transition-colors flex-shrink-0">
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <div key={item.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-zinc-800/40 group transition-colors">
+                  <span className="flex-1 text-xs font-mono text-zinc-300">{item.part_number}</span>
+                  <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => startEdit(item)}
+                      className="p-1.5 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 transition-colors"
+                      title="Edit"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(item)}
+                      disabled={deleteItem.isPending}
+                      className="p-1.5 rounded hover:bg-red-900/20 text-zinc-500 hover:text-red-400 transition-colors"
+                      title="Delete"
+                    >
+                      {deleteItem.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                    </button>
+                  </div>
+                </div>
+              )
+            )}
+            {editingId === "new" && (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800/40">
+                <input
+                  value={value}
+                  onChange={e => setValue(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") cancel(); }}
+                  placeholder="GBXIVO-IMB_..."
+                  className={inputCls}
+                  autoFocus
+                />
+                <button
+                  onClick={handleSave}
+                  disabled={isSaving || !value.trim()}
+                  className="flex items-center gap-1 px-2 py-1 rounded bg-[#16a34a] hover:bg-[#15803d] text-white text-xs font-medium disabled:opacity-50 transition-colors flex-shrink-0"
+                >
+                  {isSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                  Save
+                </button>
+                <button onClick={cancel} className="p-1 rounded hover:bg-zinc-700 text-zinc-500 hover:text-zinc-300 transition-colors flex-shrink-0">
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
+            {items.length === 0 && editingId === null && (
+              <div className="px-3 py-3 text-xs text-zinc-600">No part numbers yet. Click "Add P/N" to get started.</div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Product Dimension Definitions Tab ─────────────────────────
 type DraftDim = {
   part_number: string;
@@ -1174,6 +1279,22 @@ function ProductDimensionsTab() {
   const { data: dimensions = [], isLoading } = useProductDimensions();
   const upsert = useUpsertProductDimension();
   const deleteDim = useDeleteProductDimension();
+
+  const [unlocked, setUnlocked] = useState(false);
+  const [pwInput, setPwInput] = useState("");
+  const [pwError, setPwError] = useState(false);
+
+  function handleUnlock(e: React.FormEvent) {
+    e.preventDefault();
+    if (pwInput === "ivocontrol") {
+      setUnlocked(true);
+      setPwError(false);
+      setPwInput("");
+    } else {
+      setPwError(true);
+      setPwInput("");
+    }
+  }
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<DraftDim>(EMPTY_DRAFT);
@@ -1302,8 +1423,41 @@ function ProductDimensionsTab() {
     );
   }
 
+  if (!unlocked) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full py-16 space-y-5">
+        <div className="h-14 w-14 rounded-full bg-zinc-800 border border-zinc-700 flex items-center justify-center">
+          <Ruler className="h-6 w-6 text-zinc-500" />
+        </div>
+        <div className="text-center">
+          <p className="text-sm font-semibold text-zinc-200">PDD is locked</p>
+          <p className="text-xs text-zinc-500 mt-1">Enter the password to edit product dimensions</p>
+        </div>
+        <form onSubmit={handleUnlock} className="flex flex-col items-center gap-3 w-56">
+          <Input
+            type="password"
+            value={pwInput}
+            onChange={e => { setPwInput(e.target.value); setPwError(false); }}
+            placeholder="Password"
+            autoFocus
+            className={cn(
+              "bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 text-center",
+              pwError && "border-red-500 focus-visible:ring-red-500"
+            )}
+          />
+          {pwError && <p className="text-xs text-red-400 -mt-1">Incorrect password</p>}
+          <Button type="submit" className="w-full bg-[#16a34a] hover:bg-[#15803d] text-white">
+            Unlock
+          </Button>
+        </form>
+      </div>
+    );
+  }
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
+      <ProductCatalogSection />
+
       <div className="flex items-start justify-between pr-10">
         <div>
           <h3 className="text-sm font-semibold text-gray-900 dark:text-zinc-100">Product Dimension Definitions</h3>

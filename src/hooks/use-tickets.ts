@@ -87,17 +87,19 @@ export function useCreateTicket() {
       if (error) throw error;
 
       // Auto-update kit status to TICKET if it is currently OK
-      const { data: kit } = await supabase
-        .from("kits")
-        .select("status")
-        .eq("id", input.kit_id)
-        .single();
-
-      if (kit?.status === "OK") {
-        await supabase
+      if (input.kit_id) {
+        const { data: kit } = await supabase
           .from("kits")
-          .update({ status: "TICKET" })
-          .eq("id", input.kit_id);
+          .select("status")
+          .eq("id", input.kit_id)
+          .single();
+
+        if (kit?.status === "OK") {
+          await supabase
+            .from("kits")
+            .update({ status: "TICKET" })
+            .eq("id", input.kit_id);
+        }
       }
 
       return ticket as Ticket;
@@ -105,7 +107,8 @@ export function useCreateTicket() {
     onSuccess: (ticket) => {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["kits"] });
-      queryClient.invalidateQueries({ queryKey: ["kit", ticket.kit_id] });
+      if (ticket.kit_id) queryClient.invalidateQueries({ queryKey: ["kit", ticket.kit_id] });
+      queryClient.invalidateQueries({ queryKey: ["manufactured_items"] });
       toast.success("Ticket created");
     },
     onError: (error: Error) => {

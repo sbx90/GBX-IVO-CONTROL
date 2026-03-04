@@ -19,13 +19,14 @@ type StatusFilter = ProductUnitStatus | "ALL";
 const STATUS_FILTERS: StatusFilter[] = ["ALL", "IN_STOCK", "IN_KIT", "FAULTY", "RETIRED"];
 
 const MFG_STATUS_CONFIG: Record<ManufacturedItemStatus, { label: string; className: string }> = {
-  CREATED:    { label: "Created",    className: "bg-teal-500/15 text-teal-400 border-0" },
+  OK:         { label: "OK",         className: "bg-teal-500/15 text-teal-400 border-0" },
   IN_PROCESS: { label: "In Process", className: "bg-yellow-500/15 text-yellow-400 border-0" },
   IN_TRANSIT: { label: "In Transit", className: "bg-sky-500/15 text-sky-400 border-0" },
   AT_CLIENT:  { label: "@Client",    className: "bg-green-500/15 text-green-400 border-0" },
   RETURNED:   { label: "Returned",   className: "bg-amber-400/15 text-amber-400 border-0" },
   BAD:        { label: "Bad",        className: "bg-red-500/15 text-red-400 border-0" },
   MANUAL:     { label: "Manual",     className: "bg-purple-500/15 text-purple-400 border-0" },
+  EXTRA:      { label: "Extra Unit", className: "bg-orange-500/15 text-orange-400 border-0" },
 };
 
 export default function StockPage() {

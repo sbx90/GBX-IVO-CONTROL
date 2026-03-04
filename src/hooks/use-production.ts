@@ -22,7 +22,7 @@ export function useProductionOrders(filters?: ProductionFilters) {
       const supabase = getSupabase();
       let query = supabase
         .from("production_orders")
-        .select("*, production_steps(*)")
+        .select("*, production_steps(*), lot_imports(item_count)")
         .order("created_at", { ascending: false });
 
       if (filters?.status && filters.status !== "ALL") {
@@ -108,7 +108,7 @@ export function useUpdateOrder() {
     }: {
       id: string;
       updates: Partial<
-        Pick<ProductionOrder, "status" | "notes" | "target_date" | "current_step" | "manufacture_code">
+        Pick<ProductionOrder, "status" | "notes" | "target_date" | "current_step" | "manufacture_code" | "items" | "quantity">
       >;
     }) => {
       const supabase = getSupabase();
@@ -138,6 +138,32 @@ export function useDeleteOrder() {
   return useMutation({
     mutationFn: async (id: string) => {
       const supabase = getSupabase();
+
+      // Get all lot numbers linked to this order
+      const { data: lots } = await supabase
+        .from("lot_imports")
+        .select("lot_number")
+        .eq("production_order_id", id);
+
+      const lotNumbers = (lots ?? []).map((l: { lot_number: string }) => l.lot_number).filter(Boolean);
+
+      // Delete all manufactured items from those lots
+      if (lotNumbers.length > 0) {
+        const { error: itemsErr } = await supabase
+          .from("manufactured_items")
+          .delete()
+          .in("lot_number", lotNumbers);
+        if (itemsErr) throw itemsErr;
+      }
+
+      // Delete all lot_imports for this order
+      const { error: lotsErr } = await supabase
+        .from("lot_imports")
+        .delete()
+        .eq("production_order_id", id);
+      if (lotsErr) throw lotsErr;
+
+      // Delete the order itself (cascade removes production_steps)
       const { error } = await supabase
         .from("production_orders")
         .delete()
@@ -146,7 +172,9 @@ export function useDeleteOrder() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["orders"] });
-      toast.success("Order deleted");
+      queryClient.invalidateQueries({ queryKey: ["lot_imports"] });
+      queryClient.invalidateQueries({ queryKey: ["manufactured_items"] });
+      toast.success("Order and all associated data deleted");
     },
     onError: (error: Error) => {
       toast.error(`Failed to delete order: ${error.message}`);
@@ -251,6 +279,69 @@ export function useUpdateStepNotes() {
     },
     onError: (error: Error) => {
       toast.error(`Failed to save notes: ${error.message}`);
+    },
+  });
+}
+
+export type LotRange = { min: string; max: string; count: number };
+export type PartFulfillmentDetail = { count: number; lots: Record<string, LotRange> };
+
+export function useOrderFulfillmentDetail(orderId: string, enabled: boolean) {
+  return useQuery<Record<string, PartFulfillmentDetail>>({
+    queryKey: ["order_fulfillment_detail", orderId],
+    enabled: enabled && !!orderId,
+    staleTime: 0,
+    queryFn: async () => {
+      const supabase = getSupabase();
+
+      // Get lot numbers linked to this order
+      const { data: lots, error: lotsErr } = await supabase
+        .from("lot_imports")
+        .select("lot_number")
+        .eq("production_order_id", orderId);
+      if (lotsErr) throw lotsErr;
+
+      const lotNumbers = (lots ?? []).map((l: { lot_number: string }) => l.lot_number).filter(Boolean);
+      if (lotNumbers.length === 0) return {} as Record<string, PartFulfillmentDetail>;
+
+      // Supabase server-side max_rows=1000 cap cannot be overridden by .limit().
+      // Paginate to collect all items across multiple requests.
+      const PAGE_SIZE = 1000;
+      const allItems: { part_number: string; serial_number: string; lot_number: string }[] = [];
+      let page = 0;
+      while (true) {
+        const { data, error: itemsErr } = await supabase
+          .from("manufactured_items")
+          .select("part_number, serial_number, lot_number")
+          .in("lot_number", lotNumbers)
+          .not("status", "in", '("BAD","MANUAL","EXTRA")')
+          .or("issue.is.null,issue.eq.OK")
+          .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+        if (itemsErr) throw itemsErr;
+        allItems.push(...(data ?? []));
+        if ((data?.length ?? 0) < PAGE_SIZE) break;
+        page++;
+      }
+      const items = allItems;
+
+      // Group by part_number → lot_number → min/max S/N
+      const byPart: Record<string, PartFulfillmentDetail> = {};
+
+      for (const item of (items ?? []) as { part_number: string; serial_number: string; lot_number: string }[]) {
+        const { part_number: pn, serial_number: sn, lot_number: ln } = item;
+        if (!byPart[pn]) byPart[pn] = { count: 0, lots: {} };
+        byPart[pn].count++;
+        if (!byPart[pn].lots[ln]) byPart[pn].lots[ln] = { min: sn, max: sn, count: 1 };
+        else {
+          byPart[pn].lots[ln].count++;
+          const snNum = parseInt(sn, 10);
+          if (!isNaN(snNum)) {
+            if (snNum < parseInt(byPart[pn].lots[ln].min, 10)) byPart[pn].lots[ln].min = sn;
+            if (snNum > parseInt(byPart[pn].lots[ln].max, 10)) byPart[pn].lots[ln].max = sn;
+          }
+        }
+      }
+      return byPart;
     },
   });
 }

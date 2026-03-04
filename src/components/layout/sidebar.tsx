@@ -24,7 +24,14 @@ import { DeployButton } from "@/components/layout/deploy-button";
 import { useProfile } from "@/hooks/use-profile";
 import { canAccess, ROLE_CONFIG } from "@/lib/permissions";
 
-const navItems = [
+type NavItem = {
+  href: string;
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  badge?: "tickets" | "tasks";
+};
+
+const navItems: NavItem[] = [
   { href: "/", icon: LayoutDashboard, label: "Dashboard" },
   { href: "/production", icon: Factory, label: "Production" },
   { href: "/lots", icon: Archive, label: "Lots" },
@@ -33,7 +40,7 @@ const navItems = [
   { href: "/kits", icon: Layers, label: "Kits" },
   { href: "/tickets", icon: TicketIcon, label: "Tickets", badge: "tickets" },
   { href: "/tasks", icon: ListTodo, label: "Tasks", badge: "tasks" },
-] as const;
+];
 
 
 export function Sidebar() {

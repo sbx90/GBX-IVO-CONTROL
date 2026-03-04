@@ -16,7 +16,7 @@ export function formatDate(date: string): string {
 }
 
 export function formatDateTime(date: string): string {
-  return format(new Date(date), "MMM d, yyyy 'at' HH:mm");
+  return format(new Date(date), "MMM d, yyyy 'at' HH:mm:ss");
 }
 
 export function getStatusDot(status: ComponentStatus): string {

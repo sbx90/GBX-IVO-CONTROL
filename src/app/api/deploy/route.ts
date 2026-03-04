@@ -6,30 +6,15 @@ export async function POST() {
   const token = process.env.VERCEL_TOKEN;
   const projectId = process.env.VERCEL_PROJECT_ID;
   const teamId = process.env.VERCEL_TEAM_ID;
+  const gitRepo = process.env.VERCEL_GIT_REPO ?? "sbx90/GBX-IVO-CONTROL";
+  const gitBranch = process.env.VERCEL_GIT_BRANCH ?? "main";
 
   if (!token || !projectId || !teamId) {
     return NextResponse.json({ error: "Vercel credentials not configured" }, { status: 500 });
   }
 
-  // Get the latest deployment
-  const listRes = await fetch(
-    `${VERCEL_API}/v6/deployments?projectId=${projectId}&teamId=${teamId}&limit=1&target=production`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
-
-  if (!listRes.ok) {
-    return NextResponse.json({ error: "Failed to fetch deployments" }, { status: 500 });
-  }
-
-  const { deployments } = await listRes.json();
-  const latest = deployments?.[0];
-
-  if (!latest) {
-    return NextResponse.json({ error: "No deployments found" }, { status: 404 });
-  }
-
-  // Trigger a redeploy
-  const redeployRes = await fetch(
+  // Trigger a new deployment from the latest Git commit
+  const deployRes = await fetch(
     `${VERCEL_API}/v13/deployments?teamId=${teamId}`,
     {
       method: "POST",
@@ -39,18 +24,23 @@ export async function POST() {
       },
       body: JSON.stringify({
         name: "ivo-kit-manager",
-        deploymentId: latest.uid,
+        project: projectId,
         target: "production",
+        gitSource: {
+          type: "github",
+          repo: gitRepo,
+          ref: gitBranch,
+        },
       }),
     }
   );
 
-  if (!redeployRes.ok) {
-    const err = await redeployRes.json();
-    return NextResponse.json({ error: err.error?.message ?? "Redeploy failed" }, { status: 500 });
+  if (!deployRes.ok) {
+    const err = await deployRes.json();
+    return NextResponse.json({ error: err.error?.message ?? "Deploy failed" }, { status: 500 });
   }
 
-  const data = await redeployRes.json();
+  const data = await deployRes.json();
 
   return NextResponse.json({
     url: `https://gbx-ivo-control.vercel.app`,

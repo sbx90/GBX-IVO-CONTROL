@@ -18,7 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PRODUCTION_STATUS_CONFIG } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useOrderFulfillmentDetail } from "@/hooks/use-production";
+import { useOrderFulfillmentDetail, type LotRange } from "@/hooks/use-production";
 import { useKitDefinitions } from "@/hooks/use-kit-definitions";
 import type { ProductionOrder, KitDefinition } from "@/lib/types/database";
 

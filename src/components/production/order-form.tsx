@@ -21,20 +21,9 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Calendar } from "@/components/ui/calendar";
 import { useCreateOrder } from "@/hooks/use-production";
 import { useKitDefinitions } from "@/hooks/use-kit-definitions";
-import { COMPONENT_CONFIG, STOCK_COMPONENT_ORDER } from "@/lib/constants";
+import { useProductCatalog } from "@/hooks/use-product-catalog";
 import { cn } from "@/lib/utils";
-import type { ComponentType, ProductionOrderItem } from "@/lib/types/database";
-
-const PS_VARIANTS = [
-  { key: "ps1" as const, label: "GBXIVO-IMB-PS1" },
-  { key: "ps2" as const, label: "GBXIVO-IMB-PS2" },
-  { key: "ps3" as const, label: "GBXIVO-IMB-PS3" },
-];
-
-const WIFI_VARIANTS = [
-  { key: "rcw1" as const, label: "GBXIVO-IMB_RCW1" },
-  { key: "rcw2" as const, label: "GBXIVO-IMB_RCW2" },
-];
+import type { ProductionOrderItem } from "@/lib/types/database";
 
 const schema = z.object({
   order_number: z.string().min(1, "Order number is required"),
@@ -48,31 +37,23 @@ export function OrderForm() {
   const [targetDate, setTargetDate] = useState<Date | undefined>();
   const [mfgCode, setMfgCode] = useState("");
 
-  // Section toggles
   const [showKit, setShowKit] = useState(false);
   const [showComp, setShowComp] = useState(false);
 
   const { data: kitDefinitions, isLoading: isLoadingDefs } = useKitDefinitions();
+  const { data: catalog = [], isLoading: isLoadingCatalog } = useProductCatalog();
 
   // Kit variant quantities — keyed by definition ID
   const [kitQtys, setKitQtys] = useState<Record<string, number>>({});
 
-  // Component quantities — keyed by ComponentType
-  const [compQtys, setCompQtys] = useState<Partial<Record<ComponentType, number>>>({});
-  // Power Supply variant quantities
-  const [psQtys, setPsQtys] = useState({ ps1: 0, ps2: 0, ps3: 0 });
-  // WiFi + Cell Antenna variant quantities
-  const [wifiQtys, setWifiQtys] = useState({ rcw1: 0, rcw2: 0 });
+  // Component quantities — keyed by part_number from product_catalog
+  const [pnQtys, setPnQtys] = useState<Record<string, number>>({});
 
   const createOrder = useCreateOrder();
 
   const { register, handleSubmit, reset, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
   });
-
-  function setCompQty(type: ComponentType, qty: number) {
-    setCompQtys((prev) => ({ ...prev, [type]: qty }));
-  }
 
   function handleReset() {
     reset();
@@ -81,9 +62,7 @@ export function OrderForm() {
     setShowKit(false);
     setShowComp(false);
     setKitQtys({});
-    setCompQtys({});
-    setPsQtys({ ps1: 0, ps2: 0, ps3: 0 });
-    setWifiQtys({ rcw1: 0, rcw2: 0 });
+    setPnQtys({});
   }
 
   async function onSubmit(data: FormData) {
@@ -99,26 +78,9 @@ export function OrderForm() {
     }
 
     if (showComp) {
-      for (const type of STOCK_COMPONENT_ORDER) {
-        if (type === "POWER_SUPPLY") {
-          for (const { key, label } of PS_VARIANTS) {
-            const qty = psQtys[key];
-            if (qty > 0) {
-              items.push({ type: "COMPONENT", component_type: "POWER_SUPPLY", reference: label, quantity: qty });
-            }
-          }
-        } else if (type === "WIFI_ANTENNA") {
-          for (const { key, label } of WIFI_VARIANTS) {
-            const qty = wifiQtys[key];
-            if (qty > 0) {
-              items.push({ type: "COMPONENT", component_type: "WIFI_ANTENNA", reference: label, quantity: qty });
-            }
-          }
-        } else {
-          const qty = compQtys[type as ComponentType] ?? 0;
-          if (qty > 0) {
-            items.push({ type: "COMPONENT", component_type: type as ComponentType, quantity: qty });
-          }
+      for (const [pn, qty] of Object.entries(pnQtys)) {
+        if (qty > 0) {
+          items.push({ type: "COMPONENT", reference: pn, quantity: qty });
         }
       }
     }
@@ -176,10 +138,10 @@ export function OrderForm() {
               <button
                 type="button"
                 onClick={() => {
-                  if (showComp && (Object.values(compQtys).some((q) => q && q > 0) || Object.values(psQtys).some((q) => q > 0) || Object.values(wifiQtys).some((q) => q > 0))) {
+                  if (showComp && Object.values(pnQtys).some((q) => q > 0)) {
                     if (!confirm("Switching to Kit will clear your component quantities. Continue?")) return;
                   }
-                  setShowKit((v) => !v); setShowComp(false); setCompQtys({}); setPsQtys({ ps1: 0, ps2: 0, ps3: 0 }); setWifiQtys({ rcw1: 0, rcw2: 0 }); setKitQtys({});
+                  setShowKit((v) => !v); setShowComp(false); setPnQtys({}); setKitQtys({});
                 }}
                 className={cn(
                   "px-5 py-2 rounded-lg text-sm font-medium border transition-colors",
@@ -248,104 +210,45 @@ export function OrderForm() {
               </div>
             )}
 
-            {/* Components section */}
+            {/* Components section — driven by product_catalog */}
             {showComp && (
               <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 space-y-3">
                 <p className="text-xs font-medium text-amber-400 uppercase tracking-wider">
                   Components — enter quantity for each item to include
                 </p>
-                <div className="grid grid-cols-2 gap-x-6 gap-y-2">
-                  {STOCK_COMPONENT_ORDER.map((type) => {
-                    if (type === "POWER_SUPPLY") {
-                      const anyPs = Object.values(psQtys).some((q) => q > 0);
+                {isLoadingCatalog ? (
+                  <p className="text-xs text-zinc-500 text-center py-2">Loading products...</p>
+                ) : catalog.length === 0 ? (
+                  <p className="text-xs text-zinc-500 text-center py-2">
+                    No products found. Add them in Settings → PDD.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                    {catalog.map(({ id, part_number }) => {
+                      const qty = pnQtys[part_number] ?? 0;
                       return (
-                        <div key={type} className="col-span-2 space-y-1.5">
-                          <span className={cn("text-sm font-medium transition-colors", anyPs ? "text-zinc-200" : "text-zinc-500")}>
-                            Power Supply
+                        <div key={id} className="flex items-center gap-3">
+                          <span className={cn(
+                            "flex-1 text-sm font-mono truncate transition-colors",
+                            qty > 0 ? "text-zinc-200" : "text-zinc-500"
+                          )}>
+                            {part_number}
                           </span>
-                          {PS_VARIANTS.map(({ key, label }) => {
-                            const qty = psQtys[key];
-                            return (
-                              <div key={key} className="flex items-center gap-3 pl-3 border-l border-zinc-700">
-                                <span className={cn("flex-1 text-sm font-mono transition-colors", qty > 0 ? "text-zinc-200" : "text-zinc-500")}>
-                                  {label}
-                                </span>
-                                <Input
-                                  type="number"
-                                  value={qty === 0 ? "" : qty}
-                                  placeholder="0"
-                                  onChange={(e) => {
-                                    const v = parseInt(e.target.value);
-                                    setPsQtys((prev) => ({ ...prev, [key]: isNaN(v) ? 0 : v }));
-                                  }}
-                                  className="w-20 h-8 bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 text-sm text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                />
-                              </div>
-                            );
-                          })}
+                          <Input
+                            type="number"
+                            value={qty === 0 ? "" : qty}
+                            placeholder="0"
+                            onChange={(e) => {
+                              const v = parseInt(e.target.value);
+                              setPnQtys((prev) => ({ ...prev, [part_number]: isNaN(v) ? 0 : v }));
+                            }}
+                            className="w-20 h-8 bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 text-sm text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                          />
                         </div>
                       );
-                    }
-
-                    if (type === "WIFI_ANTENNA") {
-                      const anyWifi = Object.values(wifiQtys).some((q) => q > 0);
-                      return (
-                        <div key={type} className="col-span-2 space-y-1.5">
-                          <span className={cn("text-sm font-medium transition-colors", anyWifi ? "text-zinc-200" : "text-zinc-500")}>
-                            WiFi + Cell Antenna
-                          </span>
-                          {WIFI_VARIANTS.map(({ key, label }) => {
-                            const qty = wifiQtys[key];
-                            return (
-                              <div key={key} className="flex items-center gap-3 pl-3 border-l border-zinc-700">
-                                <span className={cn("flex-1 text-sm font-mono transition-colors", qty > 0 ? "text-zinc-200" : "text-zinc-500")}>
-                                  {label}
-                                </span>
-                                <Input
-                                  type="number"
-                                  value={qty === 0 ? "" : qty}
-                                  placeholder="0"
-                                  onChange={(e) => {
-                                    const v = parseInt(e.target.value);
-                                    setWifiQtys((prev) => ({ ...prev, [key]: isNaN(v) ? 0 : v }));
-                                  }}
-                                  className="w-20 h-8 bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 text-sm text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                />
-                              </div>
-                            );
-                          })}
-                        </div>
-                      );
-                    }
-
-                    const label =
-                      type === "MAIN_BOARD"
-                        ? "Main Board (Enclosure)"
-                        : COMPONENT_CONFIG[type].label;
-                    const qty = compQtys[type as ComponentType] ?? 0;
-
-                    return (
-                      <div key={type} className="flex items-center gap-3">
-                        <span className={cn(
-                          "flex-1 text-sm truncate transition-colors",
-                          qty > 0 ? "text-zinc-200" : "text-zinc-500"
-                        )}>
-                          {label}
-                        </span>
-                        <Input
-                          type="number"
-                          value={qty === 0 ? "" : qty}
-                          placeholder="0"
-                          onChange={(e) => {
-                            const v = parseInt(e.target.value);
-                            setCompQty(type as ComponentType, isNaN(v) ? 0 : v);
-                          }}
-                          className="w-20 h-8 bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 text-sm text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                        />
-                      </div>
-                    );
-                  })}
-                </div>
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>
