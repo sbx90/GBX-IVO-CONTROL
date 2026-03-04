@@ -6,6 +6,8 @@ import type {
   IssueCategory,
   TicketStatus,
   TicketPriority,
+  TaskStatus,
+  TaskPriority,
   ProductionStatus,
   ProductionStepStatus,
   MainboardSection,
@@ -314,6 +316,21 @@ export const ISSUE_CATEGORY_CONFIG: Record<IssueCategory, { label: string }> = {
   FIRMWARE: { label: 'Firmware' },
   WRONG_CONNECTOR: { label: 'Wrong Connector' },
   OTHER: { label: 'Other' },
+};
+
+// ─────────────────────────────────────────────────────────────
+// Task status & priority config
+// ─────────────────────────────────────────────────────────────
+
+export const TASK_STATUS_CONFIG: Record<TaskStatus, { label: string; color: string; bgColor: string }> = {
+  TODO: { label: 'Todo', color: 'text-zinc-400', bgColor: 'bg-zinc-400/10 border border-zinc-400/20' },
+  IN_PROGRESS: { label: 'In Progress', color: 'text-blue-400', bgColor: 'bg-blue-400/10 border border-blue-400/20' },
+  DONE: { label: 'Done', color: 'text-green-400', bgColor: 'bg-green-400/10 border border-green-400/20' },
+};
+
+export const TASK_PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: string; dotColor: string }> = {
+  HIGH: { label: 'High', color: 'text-red-400', dotColor: 'bg-red-400' },
+  NORMAL: { label: 'Normal', color: 'text-zinc-500', dotColor: 'bg-zinc-500' },
 };
 
 // ─────────────────────────────────────────────────────────────

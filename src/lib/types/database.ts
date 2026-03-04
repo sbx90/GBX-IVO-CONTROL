@@ -59,6 +59,32 @@ export type TicketStatus = 'OPEN' | 'IN_PROGRESS' | 'RESOLVED' | 'CLOSED';
 
 export type TicketPriority = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
+export type TaskStatus = 'TODO' | 'IN_PROGRESS' | 'DONE';
+
+export type TaskPriority = 'HIGH' | 'NORMAL';
+
+export interface Task {
+  id: string;
+  title: string;
+  description: string | null;
+  priority: TaskPriority;
+  status: TaskStatus;
+  due_date: string | null;    // ISO date string YYYY-MM-DD
+  assigned_to: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateTaskInput {
+  title: string;
+  description?: string;
+  priority: TaskPriority;
+  status?: TaskStatus;
+  due_date?: string | null;
+  assigned_to?: string;
+}
+
 export type ProductionStatus = 'QUEUED' | 'ACTIVE' | 'COMPLETE' | 'CANCELLED';
 
 export type ProductionItemType = 'KIT' | 'COMPONENT';
@@ -118,7 +144,8 @@ export interface MainboardSectionRecord {
 export interface Ticket {
   id: string;
   ticket_number: number;
-  kit_id: string;
+  kit_id: string | null;
+  manufactured_item_id: string | null;
   client_id: string | null;
   component_id: string | null;
   mainboard_section_id: string | null;
@@ -133,12 +160,13 @@ export interface Ticket {
   created_at: string;
   updated_at: string;
   // Joined fields
-  kits?: Pick<Kit, 'id' | 'serial_number' | 'status'>;
+  kits?: Pick<Kit, 'id' | 'serial_number' | 'status'> | null;
   kit_components?: Pick<KitComponent, 'id' | 'component_type'> | null;
   mainboard_sections?: Pick<MainboardSectionRecord, 'id' | 'section_name'> | null;
   ticket_comments?: TicketComment[];
   ticket_attachments?: TicketAttachment[];
   clients?: Pick<Client, 'id' | 'name'> | null;
+  manufactured_items?: Pick<ManufacturedItem, 'id' | 'part_number' | 'serial_number'> | null;
 }
 
 export interface TicketComment {
@@ -177,6 +205,7 @@ export interface ProductionOrder {
   updated_at: string;
   // Joined fields
   production_steps?: ProductionStep[];
+  lot_imports?: { item_count: number }[];
 }
 
 export interface ProductionStep {
@@ -259,7 +288,8 @@ export interface CreateKitInput {
 }
 
 export interface CreateTicketInput {
-  kit_id: string;
+  kit_id?: string;
+  manufactured_item_id?: string;
   client_id?: string;
   component_id?: string;
   mainboard_section_id?: string;
@@ -277,8 +307,8 @@ export interface CreateClientInput {
 }
 
 export interface KitDefinitionComponent {
-  component_type: ComponentType;
-  reference?: string; // e.g. 'GBXIVO-IMB-PS1' for Power Supply variants
+  component_type?: ComponentType; // legacy field — new entries use reference only
+  reference: string; // GBX part number from product_catalog
   quantity: number;
 }
 
@@ -349,7 +379,7 @@ export interface AssembledKitFilters {
   search?: string;
 }
 
-export type ManufacturedItemStatus = 'CREATED' | 'IN_PROCESS' | 'IN_TRANSIT' | 'AT_CLIENT' | 'RETURNED' | 'BAD' | 'MANUAL';
+export type ManufacturedItemStatus = 'OK' | 'IN_PROCESS' | 'IN_TRANSIT' | 'AT_CLIENT' | 'RETURNED' | 'BAD' | 'MANUAL' | 'EXTRA';
 
 export type ManufacturedItemLocation = 'SUPPLIER' | 'GBX' | 'CLIENT';
 
@@ -368,6 +398,7 @@ export interface ManufacturedItem {
   updated_at: string;
   // Joined
   clients?: { id: string; name: string } | null;
+  tickets?: { count: number }[];
 }
 
 export interface CreateManufacturedItemInput {
@@ -415,6 +446,12 @@ export interface UpsertProductDimensionInput {
   qty_per_box?: number | null;
 }
 
+export interface ProductCatalogItem {
+  id: string;
+  part_number: string;
+  created_at: string;
+}
+
 export type LotStatus = 'DELIVERED' | 'IN_TRANSIT' | 'AT_WAREHOUSE' | 'AT_FACTORY' | 'DELAYED';
 
 export interface LotImport {
@@ -428,6 +465,7 @@ export interface LotImport {
   lot_status: LotStatus;
   pl_approved: boolean;
   serial_approved: boolean;
+  extra_units: Record<string, number> | null; // { "PART_NUMBER": extra_count }
   created_at: string;
   // Joined
   clients?: { id: string; name: string } | null;
@@ -444,4 +482,5 @@ export interface CreateLotImportInput {
   lot_status?: LotStatus;
   pl_approved?: boolean;
   serial_approved?: boolean;
+  extra_units?: Record<string, number> | null;
 }

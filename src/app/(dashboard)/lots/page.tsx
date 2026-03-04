@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useRef, useMemo } from "react";
+import React, { useState, useRef, useMemo } from "react";
+import Link from "next/link";
 import {
-  FileSpreadsheet, Upload, CheckCircle2, XCircle, Download, FileText, Trash2, AlertTriangle, FileCode2,
+  FileSpreadsheet, Upload, CheckCircle2, XCircle, Download, FileText, Trash2, AlertTriangle, FileCode2, Wrench, ChevronRight, ChevronDown, MapPin, Pencil, Plus,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
@@ -40,13 +41,19 @@ import {
   useUpdateLotImport,
   useDeleteLotImport,
   useBulkCreateManufacturedItems,
+  useOrderPendingIssues,
+  useResolveIssues,
+  useUpdateLotItemsLocation,
+  useLotItemCounts,
+  useSubtractLotItems,
+  useManufacturedLotCounts,
 } from "@/hooks/use-manufactured";
 import { useClients } from "@/hooks/use-clients";
 import { useProductionOrders } from "@/hooks/use-production";
 import { useIssueDefinitions } from "@/hooks/use-issue-definitions";
 import { useKitDefinitions } from "@/hooks/use-kit-definitions";
 import { formatDate } from "@/lib/utils";
-import type { ManufacturedItemStatus, CreateManufacturedItemInput, LotImport, LotStatus, IssueDefinition } from "@/lib/types/database";
+import type { ManufacturedItemStatus, ManufacturedItemLocation, CreateManufacturedItemInput, LotImport, LotStatus, IssueDefinition } from "@/lib/types/database";
 import type { GBXLotFile } from "@/app/(dashboard)/tools/file-converter/page";
 
 // ─── PL (DOCX) types & parser ──────────────────────────────────────
@@ -82,6 +89,15 @@ interface CheckItem {
   label: string;
   passed: boolean;
   detail: string;
+}
+
+interface CrossRefRow {
+  partNumber: string;
+  parsed: number;     // total items found in Excel column
+  clean: number;      // items with no issue (packed, fulfilling PL)
+  issues: number;     // items with issue flag (kept at factory, not packed)
+  plExpected: number; // qty stated in packing list
+  fulfilled: boolean; // clean === plExpected
 }
 
 async function parseDocxPL(buffer: ArrayBuffer): Promise<PLData> {
@@ -186,7 +202,9 @@ function buildPLChecklist(pl: PLData): CheckItem[] {
 
 // ─── CSV parser ────────────────────────────────────────────────────
 
-type ParsedItem = CreateManufacturedItemInput;
+// _isException: true = item was below the blank separator (not a PL item, not saved to DB)
+// _boxNum: box number from Excel adjacent column (numeric, carry-forward per column)
+type ParsedItem = CreateManufacturedItemInput & { _isException?: boolean; _boxNum?: number };
 
 function parseCSVRows(text: string): string[][] {
   const rows: string[][] = [];
@@ -236,26 +254,41 @@ function expandRange(rangeStr: string): string[] {
   return result;
 }
 
-function parseCSVLot(csvText: string, lotNumber: string): ParsedItem[] {
+function parseCSVLot(csvText: string, lotNumber: string, issueDefs: IssueDefinition[] = []): ParsedItem[] {
   const rows = parseCSVRows(csvText);
   if (rows.length < 2) return [];
 
   console.log(`[LOT PARSER] Total CSV rows (incl. header): ${rows.length}`);
 
   const headerRow = rows[0];
-  interface ColDef { col: number; partNumber: string; type: "individual" | "range" | "skip" }
+  function csvIsCountCol(col: number): boolean {
+    let seen = 0;
+    for (let r = 1; r < Math.min(11, rows.length); r++) {
+      const v = rows[r][col]?.trim();
+      if (!v) continue;
+      const n = parseInt(v, 10);
+      if (isNaN(n) || n <= 0 || n >= 10000) return false;
+      seen++;
+    }
+    return seen > 0;
+  }
+
+  interface ColDef { col: number; partNumber: string; type: "individual" | "range" | "count" | "skip" }
   const cols: ColDef[] = [];
   for (let c = 0; c < headerRow.length; c += 2) {
     const h = headerRow[c]?.trim();
     if (!h) continue;
-    const type: ColDef["type"] = (c === 12) ? "skip" : (c === 8 || c === 10) ? "range" : "individual";
+    let type: ColDef["type"];
+    if (c === 8 || c === 10) type = "range";
+    else if (csvIsCountCol(c)) type = "count";
+    else type = "individual";
     cols.push({ col: c, partNumber: h, type });
   }
 
   const colLetters = (i: number) => String.fromCharCode(65 + i);
   console.log(`[LOT PARSER] Detected columns:`, cols.map(c => `${colLetters(c.col)}=${c.partNumber}(${c.type})`).join(", "));
 
-  const dataColIndices = cols.filter(c => c.type !== "skip").map(c => c.col);
+  const dataColIndices = cols.filter(c => c.type !== "skip" && c.type !== "count").map(c => c.col);
   let separatorRow = -1;
   for (let r = 2; r < rows.length; r++) {
     if (dataColIndices.every(ci => !rows[r][ci]?.trim())) {
@@ -272,81 +305,64 @@ function parseCSVLot(csvText: string, lotNumber: string): ParsedItem[] {
   for (const col of cols) {
     if (col.type === "skip") continue;
 
-    if (col.type === "individual") {
-      let stopRow = -1;
-      const statusCounts: Record<string, number> = { ADDED: 0, BAD: 0, MANUAL: 0, SKIP: 0 };
+    if (col.type === "count") {
+      let totalCount = 0;
+      for (let r = 1; r < normalEnd; r++) {
+        const val = rows[r][col.col]?.trim();
+        if (!val) continue;
+        const qty = parseInt(val, 10);
+        if (isNaN(qty) || qty <= 0) continue;
+        const boxId = rows[r][col.col + 1]?.trim() || `R${r}`;
+        totalCount += qty;
+        for (let i = 1; i <= qty; i++) {
+          items.push({ part_number: col.partNumber, serial_number: `${boxId}-${String(i).padStart(3, "0")}`, lot_number: lotNumber, status: "OK" });
+        }
+      }
+      console.log(`[LOT PARSER] ${colLetters(col.col)} (${col.partNumber}): count column → ${totalCount} items`);
+    } else if (col.type === "individual") {
+      const statusCounts: Record<string, number> = { OK: 0, MANUAL: 0, SKIP: 0, exception: 0 };
       for (let r = 1; r < rows.length; r++) {
         const val = rows[r][col.col]?.trim();
-        if (!val) { stopRow = r; break; }
+        if (!val) continue;
         if (!/^\d+(\.\d+)?$/.test(val)) continue;
         const sn = val.includes(".") ? val.split(".")[0] : val;
         const note = (rows[r][col.col + 1] ?? "").trim().toLowerCase();
-        if (note === "missing") { statusCounts.SKIP++; continue; }
-        const status: ManufacturedItemStatus = note.includes("taken by you") ? "MANUAL" : note ? "BAD" : "CREATED";
-        statusCounts[status]++;
-        items.push({ part_number: col.partNumber, serial_number: sn, lot_number: lotNumber, status });
+        const isException = separatorRow > 0 && r > separatorRow;
+        // "missing" only skips exception items — pre-blank PL items are always imported
+        if (isException && note === "missing") { statusCounts.SKIP++; continue; }
+        // Pre-blank PL items always import as OK regardless of adjacent comment
+        const status: ManufacturedItemStatus = isException && note.includes("taken by you") ? "MANUAL" : "OK";
+        const issue = (isException && note && !note.includes("taken by you")) ? matchIssue(note, issueDefs) : null;
+        if (isException) statusCounts.exception++; else statusCounts.OK++;
+        items.push({ part_number: col.partNumber, serial_number: sn, lot_number: lotNumber, status, issue, _isException: isException || undefined });
       }
       console.log(
         `[LOT PARSER] ${colLetters(col.col)} (${col.partNumber}): ` +
-        `started row 2, stopped at ${stopRow === -1 ? "end of file" : `row ${stopRow + 1} (blank)`} — ` +
-        `ADDED=${statusCounts.ADDED} BAD=${statusCounts.BAD} MANUAL=${statusCounts.MANUAL} SKIP=${statusCounts.SKIP}`
+        `OK=${statusCounts.OK} MANUAL=${statusCounts.MANUAL} exception=${statusCounts.exception} SKIP=${statusCounts.SKIP}`
       );
     } else {
-      let rangeCount = 0;
+      let rangeCount = 0, excCount = 0;
       const rawRanges: string[] = [];
-      for (let r = 1; r < normalEnd; r++) {
+      for (let r = 1; r < rows.length; r++) {
         const val = rows[r][col.col]?.trim();
         if (!val) continue;
         if (!val.includes("-")) continue;
         rawRanges.push(val);
+        const isException = separatorRow > 0 && r > separatorRow;
         const expanded = expandRange(val);
-        rangeCount += expanded.length;
+        if (isException) excCount += expanded.length; else rangeCount += expanded.length;
         for (const sn of expanded) {
-          items.push({ part_number: col.partNumber, serial_number: sn, lot_number: lotNumber, status: "CREATED" });
+          items.push({ part_number: col.partNumber, serial_number: sn, lot_number: lotNumber, status: "OK", _isException: isException || undefined });
         }
       }
       console.log(
         `[LOT PARSER] ${colLetters(col.col)} (${col.partNumber}): ` +
-        `range column, scanned rows 2–${normalEnd + 1} — ` +
-        `ranges found: [${rawRanges.join(", ")}] → ADDED=${rangeCount}`
+        `range column — ranges: [${rawRanges.join(", ")}] → PL=${rangeCount} exception=${excCount}`
       );
     }
   }
 
-  if (separatorRow > 0) {
-    let excStart = separatorRow + 1;
-    while (excStart < rows.length && rows[excStart].every(c => !c?.trim())) excStart++;
-
-    const excCounts: Record<string, number> = {};
-    for (let r = excStart; r < rows.length; r++) {
-      const row = rows[r];
-      if (row.every(c => !c?.trim())) continue;
-      for (const col of cols) {
-        if (col.type === "skip") continue;
-        const val = row[col.col]?.trim();
-        if (!val) continue;
-        if (!/^\d/.test(val)) continue;
-        const sn = val.includes(".") ? val.split(".")[0] : val;
-        const note = (row[col.col + 1] ?? "").trim().toLowerCase();
-        if (note === "missing") continue;
-        const status: ManufacturedItemStatus = note.includes("taken by you") ? "MANUAL" : "BAD";
-        const key = `${col.partNumber}:${status}`;
-        excCounts[key] = (excCounts[key] ?? 0) + 1;
-        if (col.type === "range" && sn.includes("-")) {
-          for (const expandedSn of expandRange(sn)) {
-            items.push({ part_number: col.partNumber, serial_number: expandedSn, lot_number: lotNumber, status });
-          }
-        } else {
-          items.push({ part_number: col.partNumber, serial_number: sn, lot_number: lotNumber, status });
-        }
-      }
-    }
-    if (Object.keys(excCounts).length > 0) {
-      console.log(`[LOT PARSER] Exception section items:`, excCounts);
-    }
-  }
-
-  const totalByStatus = items.reduce((acc, i) => { const s = i.status ?? "CREATED"; acc[s] = (acc[s] ?? 0) + 1; return acc; }, {} as Record<string, number>);
+  const totalByStatus = items.reduce((acc, i) => { const s = i.status ?? "OK"; acc[s] = (acc[s] ?? 0) + 1; return acc; }, {} as Record<string, number>);
   console.log(`[LOT PARSER] FINAL TOTALS:`, totalByStatus);
 
   return items;
@@ -365,10 +381,28 @@ function matchIssue(comment: string, defs: IssueDefinition[]): string | null {
 function parseExcelLot(buffer: ArrayBuffer, lotNumber: string, issueDefs: IssueDefinition[] = [], knownPartNumbers: string[] = []): ParsedItem[] {
   const wb = XLSX.read(buffer, { type: "array" });
   const ws = wb.Sheets[wb.SheetNames[0]];
+
+  // Fix stale/truncated !ref: expand to cover all actual cells
+  const origRef = ws['!ref'] ?? "A1";
+  const allCellKeys = Object.keys(ws).filter(k => /^[A-Z]+\d+$/.test(k));
+  if (allCellKeys.length > 0) {
+    const range = XLSX.utils.decode_range(origRef);
+    for (const key of allCellKeys) {
+      const addr = XLSX.utils.decode_cell(key);
+      if (addr.r > range.e.r) range.e.r = addr.r;
+      if (addr.c > range.e.c) range.e.c = addr.c;
+    }
+    const newRef = XLSX.utils.encode_range(range);
+    if (newRef !== origRef) {
+      ws['!ref'] = newRef;
+      console.log(`[EXCEL PARSER] Expanded !ref from ${origRef} to ${newRef}`);
+    }
+  }
+
   const rows = XLSX.utils.sheet_to_json<(string | number | null)[]>(ws, { header: 1 });
   if (rows.length === 0) return [];
 
-  console.log(`[EXCEL PARSER] Total rows (incl. header): ${rows.length}`);
+  console.log(`[EXCEL PARSER] Total rows (incl. header): ${rows.length} (ref: ${ws['!ref']})`);
 
   // Auto-detect header row: skip title rows (e.g. "LOT 2"), find first row
   // where even-column cells look like part numbers (contain "-" or "_")
@@ -385,18 +419,30 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string, issueDefs: IssueD
   const dataStart = headerIdx + 1;
 
   const header = rows[headerIdx] as (string | null)[];
-  const componentCols: { col: number; partNumber: string; isRange: boolean }[] = [];
+  const componentCols: { col: number; partNumber: string; isRange: boolean; isCount: boolean }[] = [];
 
   const matchedCols = new Set<number>();
 
+  // Detect count columns: values are small integers (quantities, not serial numbers)
+  function isCountCol(col: number): boolean {
+    let seen = 0;
+    for (let r = dataStart; r < Math.min(dataStart + 10, rows.length); r++) {
+      const v = (rows[r] as (string | number | null)[])[col];
+      if (v == null || v === "") continue;
+      const n = typeof v === "number" ? v : parseInt(v.toString(), 10);
+      if (isNaN(n) || n <= 0 || n >= 10000) return false;
+      seen++;
+    }
+    return seen > 0;
+  }
+
   if (knownPartNumbers.length > 0) {
-    // Primary: find columns by exact match to known part numbers (any column position)
     for (let c = 0; c < header.length; c++) {
       const h = header[c];
       if (!h || typeof h !== "string") continue;
       const matched = knownPartNumbers.find(pn => pn.trim().toUpperCase() === h.trim().toUpperCase());
       if (matched) {
-        componentCols.push({ col: c, partNumber: matched, isRange: matched.toUpperCase().includes("PS") || matched.toUpperCase().includes("CDL") });
+        componentCols.push({ col: c, partNumber: matched, isRange: matched.toUpperCase().includes("PS") || matched.toUpperCase().includes("CDL"), isCount: isCountCol(c) });
         matchedCols.add(c);
       }
     }
@@ -404,26 +450,28 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string, issueDefs: IssueD
     if (unmatched.length > 0) console.warn(`[EXCEL PARSER] Part numbers from kit def not found in Excel:`, unmatched);
   }
 
-  // Always also scan even columns for part-number-like headers not already matched above
-  // This catches components that aren't in the kit definition (e.g. RCW1 added later)
+  // Scan even columns for part-number-like headers not already matched
   for (let c = 0; c < header.length; c += 2) {
     if (matchedCols.has(c)) continue;
     const h = header[c];
     if (!h || typeof h !== "string") continue;
     if (h.includes("-") || h.includes("_")) {
-      componentCols.push({ col: c, partNumber: h, isRange: h.toUpperCase().includes("PS") || h.toUpperCase().includes("CDL") });
+      componentCols.push({ col: c, partNumber: h, isRange: h.toUpperCase().includes("PS") || h.toUpperCase().includes("CDL"), isCount: isCountCol(c) });
       matchedCols.add(c);
     }
   }
 
   const colLetters = (i: number) => String.fromCharCode(65 + i);
-  console.log(`[EXCEL PARSER] Detected columns:`, componentCols.map(c => `${colLetters(c.col)}=${c.partNumber}(${c.isRange ? "range" : "individual"})`).join(", "));
+  console.log(`[EXCEL PARSER] Detected columns:`, componentCols.map(c => `${colLetters(c.col)}=${c.partNumber}(${c.isCount ? "count" : c.isRange ? "range" : "individual"})`).join(", "));
 
-  const dataColIndices = componentCols.map(c => c.col);
+  // Use only non-count columns to detect the separator row. Count columns (e.g. RCW1)
+  // may have data in rows that correspond to the blank separator between PL items and
+  // exception items, which would prevent detection if included.
+  const separatorColIndices = componentCols.filter(c => !c.isCount).map(c => c.col);
   let separatorRow = -1;
   for (let r = dataStart + 1; r < rows.length; r++) {
     const row = rows[r] as (string | number | null)[];
-    if (dataColIndices.every(ci => row[ci] == null || row[ci] === "")) {
+    if (separatorColIndices.every(ci => row[ci] == null || row[ci] === "")) {
       separatorRow = r;
       break;
     }
@@ -434,7 +482,7 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string, issueDefs: IssueD
   const items: ParsedItem[] = [];
 
   // Build a map of row → comment text for each odd column (B=1, D=3, F=5, H=7…)
-  // These adjacent columns contain factory comments (e.g. "Not sent", "Failed MB")
+  // Post-blank exception rows use text comments (e.g. "Not sent", "Failed MB")
   const colComments = new Map<number, Map<number, string>>();
   // First pass: expand merged cell ranges
   const merges: XLSX.Range[] = ((ws as { '!merges'?: XLSX.Range[] })['!merges']) ?? [];
@@ -458,8 +506,42 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string, issueDefs: IssueD
     if (!colMap.has(r)) colMap.set(r, cell.v); // don't overwrite merged values
   }
 
+  // Build a map of row → box number for each odd column
+  // Pre-blank rows: adjacent odd col contains a NUMERIC box number (e.g. 1, 2, 12)
+  // The number only appears once when the box changes — carry-forward handles the rest
+  const colBoxNums = new Map<number, Map<number, number>>();
+  for (const key of Object.keys(ws).filter(k => /^[A-Z]+\d+$/.test(k))) {
+    const { r, c } = XLSX.utils.decode_cell(key);
+    if (c % 2 !== 1) continue; // odd columns only
+    const cell = ws[key];
+    if (cell?.v == null || typeof cell.v !== 'number') continue;
+    const numVal = Math.round(cell.v);
+    if (numVal <= 0 || numVal > 999) continue; // box numbers are small positive integers
+    if (!colBoxNums.has(c)) colBoxNums.set(c, new Map());
+    colBoxNums.get(c)!.set(r, numVal);
+  }
+
   for (const comp of componentCols) {
-    if (comp.isRange) {
+    if (comp.isCount) {
+      // Count column: each cell is a quantity (e.g. 100). Adjacent col holds box ID.
+      // Expand into individual items with synthetic serial numbers: {boxId}-{padded_index}
+      let totalCount = 0;
+      for (let r = dataStart; r < normalEnd; r++) {
+        const row = rows[r] as (string | number | null)[];
+        const val = row[comp.col];
+        if (val == null || val === "") continue;
+        const qty = typeof val === "number" ? val : parseInt(val.toString(), 10);
+        if (isNaN(qty) || qty <= 0) continue;
+        const boxRaw = row[comp.col + 1];
+        const boxId = boxRaw != null && boxRaw !== "" ? boxRaw.toString().trim() : `R${r - dataStart + 1}`;
+        totalCount += qty;
+        for (let i = 1; i <= qty; i++) {
+          const sn = `${boxId}-${String(i).padStart(3, "0")}`;
+          items.push({ part_number: comp.partNumber, serial_number: sn, lot_number: lotNumber, status: "OK", issue: null });
+        }
+      }
+      console.log(`[EXCEL PARSER] ${colLetters(comp.col)} (${comp.partNumber}): count column → ${totalCount} items`);
+    } else if (comp.isRange) {
       const rawRanges: string[] = [];
       let rangeCount = 0;
       for (let r = dataStart; r < normalEnd; r++) {
@@ -472,53 +554,46 @@ function parseExcelLot(buffer: ArrayBuffer, lotNumber: string, issueDefs: IssueD
         const expanded = expandRange(strVal);
         rangeCount += expanded.length;
         for (const sn of expanded) {
-          items.push({ part_number: comp.partNumber, serial_number: sn, lot_number: lotNumber, status: "CREATED" });
+          items.push({ part_number: comp.partNumber, serial_number: sn, lot_number: lotNumber, status: "OK", issue: null });
         }
       }
       console.log(`[EXCEL PARSER] ${colLetters(comp.col)} (${comp.partNumber}): ranges [${rawRanges.join(", ")}] → ADDED=${rangeCount}`);
     } else {
-      let seenBlank = false;
-      const statusCounts = { CREATED: 0, BAD: 0 };
-      let firstBlankRow = -1;
+      // Per-column: collect ALL items. Items below the blank separator are marked
+      // _isException=true (shown in preview but not saved to DB).
+      const statusCounts = { OK: 0, MANUAL: 0, SKIP: 0, exception: 0 };
       let firstAddedRow = -1, lastAddedRow = -1;
-      let firstBadRow = -1, lastBadRow = -1;
+      let currentBoxNum: number | null = null;
       for (let r = dataStart; r < rows.length; r++) {
         const row = rows[r] as (string | number | null)[];
         const val = row[comp.col];
-        const isEmpty = val == null || val === "";
-        if (isEmpty) {
-          if (!seenBlank) { seenBlank = true; firstBlankRow = r; }
-          continue;
-        }
+        if (val == null || val === "") continue;
         const strVal = val.toString().trim();
         if (!(typeof val === "number" || /^\d+$/.test(strVal))) continue;
-        const status: ManufacturedItemStatus = seenBlank ? "BAD" : "CREATED";
-        statusCounts[status]++;
+        // Track box number from adjacent column (numeric, carry-forward)
+        const boxNumAtRow = colBoxNums.get(comp.col + 1)?.get(r);
+        if (boxNumAtRow != null) currentBoxNum = boxNumAtRow;
         const adjComment = colComments.get(comp.col + 1)?.get(r) ?? null;
-        const issue = adjComment ? matchIssue(adjComment, issueDefs) : null;
-        items.push({ part_number: comp.partNumber, serial_number: strVal, lot_number: lotNumber, status, issue });
-        if (status === "CREATED") {
-          if (firstAddedRow === -1) firstAddedRow = r;
-          lastAddedRow = r;
-        } else {
-          if (firstBadRow === -1) firstBadRow = r;
-          lastBadRow = r;
-        }
+        const commentLower = adjComment?.toLowerCase() ?? "";
+        const isException = separatorRow > 0 && r > separatorRow;
+        // "missing" only skips exception items — pre-blank PL items are always imported
+        if (isException && commentLower === "missing") { statusCounts.SKIP++; continue; }
+        // Pre-blank PL items always import as OK regardless of adjacent comment
+        const status: ManufacturedItemStatus = isException && commentLower.includes("taken by you") ? "MANUAL" : "OK";
+        const issue = (isException && adjComment && !commentLower.includes("taken by you")) ? matchIssue(adjComment, issueDefs) : null;
+        if (isException) statusCounts.exception++; else statusCounts.OK++;
+        const _boxNum = !isException && currentBoxNum != null ? currentBoxNum : undefined;
+        items.push({ part_number: comp.partNumber, serial_number: strVal, lot_number: lotNumber, status, issue, _isException: isException || undefined, _boxNum });
+        if (firstAddedRow === -1) firstAddedRow = r;
+        lastAddedRow = r;
       }
       const col = colLetters(comp.col);
       const addedRange = firstAddedRow !== -1 ? `${col}${firstAddedRow + 1}:${col}${lastAddedRow + 1}` : "—";
-      const badRange = firstBadRow !== -1 ? `${col}${firstBadRow + 1}:${col}${lastBadRow + 1}` : "none";
-      const blankAt = firstBlankRow !== -1 ? `${col}${firstBlankRow + 1}` : "never";
-      console.log(
-        `[EXCEL PARSER] ${col} (${comp.partNumber}): ` +
-        `CREATED ${addedRange} (${statusCounts.CREATED} items) | ` +
-        `first blank: ${blankAt} | ` +
-        `BAD ${badRange} (${statusCounts.BAD} items)`
-      );
+      console.log(`[EXCEL PARSER] ${col} (${comp.partNumber}): ${statusCounts.OK} PL + ${statusCounts.exception} exception + ${statusCounts.MANUAL} MANUAL + ${statusCounts.SKIP} skipped, range ${addedRange}`);
     }
   }
 
-  const totalByStatus = items.reduce((acc, i) => { const s = i.status ?? "CREATED"; acc[s] = (acc[s] ?? 0) + 1; return acc; }, {} as Record<string, number>);
+  const totalByStatus = items.reduce((acc, i) => { const s = i.status ?? "OK"; acc[s] = (acc[s] ?? 0) + 1; return acc; }, {} as Record<string, number>);
   console.log(`[EXCEL PARSER] FINAL TOTALS:`, totalByStatus);
 
   return items;
@@ -553,13 +628,25 @@ function assignBoxLabels(items: ParsedItem[], plData: PLData | null): ParsedItem
     const plRows = plByPart.get(key);
     if (!plRows) { result.push(...partItems); continue; }
 
-    // Sort items by serial number numerically, then assign boxes positionally
+    // If items have _boxNum from Excel adjacent column, use those directly (accurate)
+    const hasExcelBoxNums = partItems.some(i => i._boxNum != null);
+    if (hasExcelBoxNums) {
+      const firstRow = [...plRows].sort((a, b) => a.boxStart - b.boxStart)[0];
+      const labeled = partItems.map(item => ({
+        ...item,
+        box_label: item._boxNum != null && !item._isException
+          ? `LOT#${firstRow.lotNum} ${item._boxNum}/${firstRow.totalBoxes}`
+          : (item.box_label ?? null),
+      }));
+      result.push(...labeled);
+      continue;
+    }
+
+    // Fallback: positional assignment from PL (for count/range cols without _boxNum)
     const sorted = [...partItems].sort((a, b) =>
       (parseInt(a.serial_number, 10) || 0) - (parseInt(b.serial_number, 10) || 0)
     );
-    // Sort PLRows by boxStart to handle split-box scenarios
     const sortedRows = [...plRows].sort((a, b) => a.boxStart - b.boxStart);
-
     let idx = 0;
     for (const row of sortedRows) {
       for (let box = row.boxStart; box <= row.boxEnd && idx < sorted.length; box++) {
@@ -575,18 +662,27 @@ function assignBoxLabels(items: ParsedItem[], plData: PLData | null): ParsedItem
 
 // ─── Cross-reference ───────────────────────────────────────────────
 
-function buildCrossRefChecks(pl: PLData, parsedItems: ParsedItem[]): CheckItem[] {
-  const countByPart: Record<string, number> = {};
+function buildCrossRefChecks(pl: PLData, parsedItems: ParsedItem[]): CrossRefRow[] {
+  const totalByPart: Record<string, number> = {};
+  const cleanByPart: Record<string, number> = {};
+  const issuesByPart: Record<string, number> = {};
   for (const item of parsedItems) {
-    if (item.status !== "CREATED") continue;
     const key = normPart(item.part_number);
-    countByPart[key] = (countByPart[key] ?? 0) + 1;
+    totalByPart[key] = (totalByPart[key] ?? 0) + 1;
+    if (item.issue) {
+      issuesByPart[key] = (issuesByPart[key] ?? 0) + 1;
+    } else {
+      cleanByPart[key] = (cleanByPart[key] ?? 0) + 1;
+    }
   }
-  return pl.rows
-    .map((row) => {
-      const actual = countByPart[normPart(row.partNumber)] ?? 0;
-      return { label: row.partNumber, passed: actual === row.qtyTotal, detail: `Parsed: ${actual} | PL expected: ${row.qtyTotal}` };
-    });
+  return pl.rows.map((row) => {
+    const key = normPart(row.partNumber);
+    const parsed = totalByPart[key] ?? 0;
+    const clean = cleanByPart[key] ?? 0;
+    const issues = issuesByPart[key] ?? 0;
+    const plExpected = row.qtyTotal;
+    return { partNumber: row.partNumber, parsed, clean, issues, plExpected, fulfilled: parsed === plExpected };
+  });
 }
 
 // ─── Import summary ────────────────────────────────────────────────
@@ -597,9 +693,9 @@ function buildImportSummary(items: ParsedItem[]): Record<string, PartSummary> {
   const byPart: Record<string, PartSummary> = {};
   for (const item of items) {
     if (!byPart[item.part_number]) byPart[item.part_number] = { added: 0, bad: 0, manual: 0, skipped: 0 };
-    if (item.status === "CREATED") byPart[item.part_number].added++;
-    else if (item.status === "BAD") byPart[item.part_number].bad++;
-    else if (item.status === "MANUAL") byPart[item.part_number].manual++;
+    if (item.status === "MANUAL") byPart[item.part_number].manual++;
+    else if (item.issue) byPart[item.part_number].bad++; // OK products with a known issue
+    else byPart[item.part_number].added++;
   }
   return byPart;
 }
@@ -625,10 +721,197 @@ function CheckIcon({ passed }: { passed: boolean }) {
 
 function fmt(n: number) { return n.toLocaleString(); }
 
+// ─── Edit LOT Dialog ────────────────────────────────────────────────
+
+function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () => void }) {
+  const { data: partCounts = [], isLoading } = useLotItemCounts(lot?.lot_number ?? null);
+  const bulkCreate = useBulkCreateManufacturedItems();
+  const updateLotImport = useUpdateLotImport();
+  const subtractLotItems = useSubtractLotItems();
+
+  const [expanded, setExpanded] = useState<{ part: string; mode: "add" | "subtract" } | null>(null);
+  const [inputCount, setInputCount] = useState("");
+  const [inputStartSerial, setInputStartSerial] = useState("1");
+  const [lastAdded, setLastAdded] = useState<{ partNumber: string; count: number } | null>(null);
+
+  function openRow(part: string, mode: "add" | "subtract") {
+    setExpanded(expanded?.part === part && expanded.mode === mode ? null : { part, mode });
+    setInputCount("");
+    setInputStartSerial("1");
+  }
+
+  function handleAdd(partNumber: string) {
+    if (!lot) return;
+    const count = parseInt(inputCount, 10);
+    const start = parseInt(inputStartSerial, 10);
+    if (isNaN(count) || count <= 0 || isNaN(start)) return;
+    const end = start + count - 1;
+    const pad = Math.max(String(end).length, 3);
+    const items: CreateManufacturedItemInput[] = [];
+    for (let i = start; i <= end; i++) {
+      items.push({ part_number: partNumber, serial_number: String(i).padStart(pad, "0"), lot_number: lot.lot_number, status: "OK", issue: null, box_label: null });
+    }
+    bulkCreate.mutate(items, {
+      onSuccess: () => {
+        updateLotImport.mutate({ id: lot.id, updates: { item_count: (lot.item_count ?? 0) + items.length } });
+        setLastAdded({ partNumber, count: items.length });
+        setExpanded(null);
+        setInputCount("");
+        setInputStartSerial("1");
+      },
+    });
+  }
+
+  function handleSubtract(partNumber: string) {
+    if (!lot) return;
+    const count = parseInt(inputCount, 10);
+    if (isNaN(count) || count <= 0) return;
+    subtractLotItems.mutate({ lotNumber: lot.lot_number, partNumber, count }, {
+      onSuccess: (removed) => {
+        updateLotImport.mutate({ id: lot.id, updates: { item_count: Math.max(0, (lot.item_count ?? 0) - removed) } });
+        setExpanded(null);
+        setInputCount("");
+        if (lastAdded?.partNumber === partNumber) setLastAdded(null);
+      },
+    });
+  }
+
+  function handleRevert() {
+    if (!lot || !lastAdded) return;
+    subtractLotItems.mutate({ lotNumber: lot.lot_number, partNumber: lastAdded.partNumber, count: lastAdded.count }, {
+      onSuccess: (removed) => {
+        updateLotImport.mutate({ id: lot.id, updates: { item_count: Math.max(0, (lot.item_count ?? 0) - removed) } });
+        setLastAdded(null);
+      },
+    });
+  }
+
+  const isPending = bulkCreate.isPending || subtractLotItems.isPending;
+
+  return (
+    <Dialog open={!!lot} onOpenChange={(o) => { if (!o) { onClose(); setExpanded(null); setLastAdded(null); } }}>
+      <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Edit Items — {lot?.lot_number}</DialogTitle>
+          <p className="text-zinc-500 text-sm">Use + to add or − to remove items per part number.</p>
+        </DialogHeader>
+        {lastAdded && (
+          <div className="flex items-center justify-between bg-zinc-800/60 border border-zinc-700 rounded-lg px-3 py-2 text-xs">
+            <span className="text-zinc-400">Added <span className="text-zinc-200 font-semibold">{lastAdded.count}</span> × <span className="font-mono text-zinc-200">{lastAdded.partNumber}</span></span>
+            <button onClick={handleRevert} disabled={isPending} className="text-amber-400 hover:text-amber-300 font-medium transition-colors disabled:opacity-50">
+              Revert
+            </button>
+          </div>
+        )}
+        <div className="mt-1">
+          {isLoading ? (
+            <div className="py-8 text-center text-zinc-500 text-sm animate-pulse">Loading…</div>
+          ) : partCounts.length === 0 ? (
+            <div className="py-8 text-center text-zinc-600 text-sm">No items found for this LOT.</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-800">
+                  <th className="text-left text-xs text-zinc-500 uppercase tracking-wider pb-2">Part Number</th>
+                  <th className="text-right text-xs text-zinc-500 uppercase tracking-wider pb-2 pr-2">Count</th>
+                  <th className="w-16" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800/60">
+                {partCounts.map(({ part_number, count }) => (
+                  <React.Fragment key={part_number}>
+                    <tr className="group">
+                      <td className="py-2.5 font-mono text-zinc-200 text-xs">{part_number}</td>
+                      <td className="py-2.5 text-right pr-2 tabular-nums text-zinc-300 font-semibold">{count.toLocaleString()}</td>
+                      <td className="py-2.5">
+                        <div className="flex items-center gap-0.5">
+                          <button
+                            onClick={() => openRow(part_number, "subtract")}
+                            className={`p-1 rounded transition-colors ${expanded?.part === part_number && expanded.mode === "subtract" ? "text-red-400 bg-zinc-800" : "text-zinc-600 hover:text-red-400 hover:bg-zinc-800"}`}
+                            title={`Subtract items for ${part_number}`}
+                          >
+                            <span className="text-base leading-none font-bold">−</span>
+                          </button>
+                          <button
+                            onClick={() => openRow(part_number, "add")}
+                            className={`p-1 rounded transition-colors ${expanded?.part === part_number && expanded.mode === "add" ? "text-[#16a34a] bg-zinc-800" : "text-zinc-600 hover:text-[#16a34a] hover:bg-zinc-800"}`}
+                            title={`Add items for ${part_number}`}
+                          >
+                            <Plus className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {expanded?.part === part_number && (
+                      <tr>
+                        <td colSpan={3} className="pb-3 pt-1">
+                          <div className={`rounded-lg p-3 space-y-2 border ${expanded.mode === "add" ? "bg-zinc-800/60 border-zinc-700" : "bg-red-950/20 border-red-900/40"}`}>
+                            <p className="text-xs font-medium">
+                              {expanded.mode === "add" ? (
+                                <span className="text-zinc-400">Add to <span className="font-mono text-zinc-200">{part_number}</span></span>
+                              ) : (
+                                <span className="text-red-400">Remove last N from <span className="font-mono text-zinc-200">{part_number}</span></span>
+                              )}
+                            </p>
+                            <div className="flex gap-2 items-end">
+                              <div className="flex-1 space-y-1">
+                                <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Count</label>
+                                <Input
+                                  type="number"
+                                  min="1"
+                                  placeholder="100"
+                                  value={inputCount}
+                                  onChange={(e) => setInputCount(e.target.value)}
+                                  className="h-7 text-xs bg-zinc-700 border-zinc-600 text-zinc-100"
+                                  autoFocus
+                                />
+                              </div>
+                              {expanded.mode === "add" && (
+                                <div className="flex-1 space-y-1">
+                                  <label className="text-[10px] text-zinc-500 uppercase tracking-wider">Start Serial</label>
+                                  <Input
+                                    type="number"
+                                    min="1"
+                                    placeholder="1"
+                                    value={inputStartSerial}
+                                    onChange={(e) => setInputStartSerial(e.target.value)}
+                                    className="h-7 text-xs bg-zinc-700 border-zinc-600 text-zinc-100"
+                                  />
+                                </div>
+                              )}
+                              <Button
+                                size="sm"
+                                className={`h-7 text-xs shrink-0 ${expanded.mode === "add" ? "bg-[#16a34a] hover:bg-[#15803d] text-white" : "bg-red-700 hover:bg-red-600 text-white"}`}
+                                onClick={() => expanded.mode === "add" ? handleAdd(part_number) : handleSubtract(part_number)}
+                                disabled={isPending || !inputCount}
+                              >
+                                {isPending ? "…" : expanded.mode === "add" ? "Add" : "Remove"}
+                              </Button>
+                              <Button size="sm" variant="ghost" className="h-7 text-xs text-zinc-400 shrink-0" onClick={() => setExpanded(null)}>
+                                Cancel
+                              </Button>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── Page ──────────────────────────────────────────────────────────
 
 export default function LotsPage() {
   const { data: lotImports = [] } = useLotImports();
+  const lotNumbers = useMemo(() => lotImports.map((l) => l.lot_number).filter(Boolean) as string[], [lotImports]);
+  const { data: goodCounts = {} } = useManufacturedLotCounts(lotNumbers);
   const { data: clients = [] } = useClients();
   const { data: allOrders = [] } = useProductionOrders();
   const { data: issueDefinitions = [] } = useIssueDefinitions();
@@ -640,7 +923,29 @@ export default function LotsPage() {
   const createLotImport = useCreateLotImport();
   const updateLotImport = useUpdateLotImport();
   const deleteLotImport = useDeleteLotImport();
+  const updateLotLocation = useUpdateLotItemsLocation();
   const bulkCreate = useBulkCreateManufacturedItems();
+  const resolveIssues = useResolveIssues();
+
+  // ── Edit LOT items state ──
+  const [editLot, setEditLot] = useState<LotImport | null>(null);
+
+  // ── Location edit state ──
+  const [locationEditLot, setLocationEditLot] = useState<LotImport | null>(null);
+  const [locationEditValue, setLocationEditValue] = useState<ManufacturedItemLocation>("GBX");
+
+  function openLocationEdit(lot: LotImport) {
+    setLocationEditLot(lot);
+    setLocationEditValue("GBX");
+  }
+
+  function handleSaveLocation() {
+    if (!locationEditLot) return;
+    updateLotLocation.mutate(
+      { lotNumber: locationEditLot.lot_number, location: locationEditValue },
+      { onSuccess: () => setLocationEditLot(null) }
+    );
+  }
 
   function handleDeleteLot(lot: LotImport) {
     if (!confirm(`Delete LOT "${lot.lot_number}" and all ${fmt(lot.item_count)} associated items? This cannot be undone.`)) return;
@@ -681,7 +986,7 @@ export default function LotsPage() {
   // Serial number file
   const [parsedItems, setParsedItems] = useState<ParsedItem[] | null>(null);
   const [importSummary, setImportSummary] = useState<Record<string, PartSummary> | null>(null);
-  const [crossRefChecks, setCrossRefChecks] = useState<CheckItem[] | null>(null);
+  const [crossRefChecks, setCrossRefChecks] = useState<CrossRefRow[] | null>(null);
   const [duplicates, setDuplicates] = useState<{ part_number: string; serial_number: string; lot_number: string | null }[] | null>(null);
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
   const [snError, setSnError] = useState("");
@@ -690,6 +995,20 @@ export default function LotsPage() {
   const snFileRef = useRef<HTMLInputElement>(null);
   const gbxRef = useRef<HTMLInputElement>(null);
   const [gbxDragging, setGbxDragging] = useState(false);
+
+  // Issues overview
+  const [expandedIssues, setExpandedIssues] = useState<Set<string>>(new Set());
+  const { data: pendingDbIssues = [] } = useOrderPendingIssues(
+    importOrderId !== "none" ? importOrderId : "",
+    importOrderId !== "none",
+  );
+  function toggleExpandIssue(name: string) {
+    setExpandedIssues((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
+  }
 
   function openImport() {
     setPlChecks(null); setPlData(null); setPlError(""); setDocxFile(null);
@@ -824,7 +1143,7 @@ export default function LotsPage() {
       reader.onload = (ev) => {
         try {
           const text = ev.target?.result as string;
-          const raw = parseCSVLot(text, importLot.trim());
+          const raw = parseCSVLot(text, importLot.trim(), issueDefinitions);
           if (raw.length === 0) { setSnError("No valid items found in the file."); return; }
           const parsed = assignBoxLabels(raw, plData);
           setParsedItems(parsed);
@@ -861,6 +1180,11 @@ export default function LotsPage() {
     const clientId = importClientId !== "none" ? importClientId : undefined;
     const supabase = createClient();
 
+    // Only save PL items (above the blank separator) — exception items are shown
+    // in the import preview but not saved to manufactured_items. Pre-blank items
+    // are always OK so no status filter needed here.
+    const cleanItems = parsedItems.filter((item) => !item._isException);
+
     let docxPath: string | null = null;
     let snPath: string | null = null;
 
@@ -883,13 +1207,14 @@ export default function LotsPage() {
       lot_number: lot,
       ...(docxPath && { docx_path: docxPath }),
       ...(snPath && { xlsx_path: snPath }),
-      item_count: parsedItems.length,
+      item_count: cleanItems.length,
       ...(clientId && { client_id: clientId }),
       ...(orderId && { production_order_id: orderId }),
       lot_status: "AT_FACTORY",
     });
 
-    const itemsWithClient = parsedItems.map((item) => ({
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const itemsWithClient = cleanItems.map(({ _isException, ...item }) => ({
       ...item,
       location: "GBX" as const,
       ...(clientId && { client_id: clientId }),
@@ -931,10 +1256,18 @@ export default function LotsPage() {
           <h1 className="text-2xl font-bold text-zinc-100">Lots</h1>
           <p className="text-zinc-500 text-sm mt-0.5">{lotImports.length > 0 ? `${lotImports.length} lot${lotImports.length === 1 ? "" : "s"} imported` : "No lots imported yet"}</p>
         </div>
-        <Button variant="outline" onClick={openImport} className="border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 gap-2">
-          <FileSpreadsheet className="h-4 w-4" />
-          Import LOT
-        </Button>
+        <div className="flex items-center gap-2">
+          <Link href="/tools/file-converter">
+            <Button variant="outline" className="border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 gap-2">
+              <Wrench className="h-4 w-4" />
+              LOT-TOOL
+            </Button>
+          </Link>
+          <Button variant="outline" onClick={openImport} className="border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 gap-2">
+            <FileSpreadsheet className="h-4 w-4" />
+            Import LOT
+          </Button>
+        </div>
       </div>
 
       {/* Lots Table */}
@@ -950,7 +1283,7 @@ export default function LotsPage() {
               <TableHead className="text-zinc-500">Status</TableHead>
               <TableHead className="text-zinc-500">Production Order</TableHead>
               <TableHead className="text-zinc-500">Client</TableHead>
-              <TableHead className="text-zinc-500 text-right">Items</TableHead>
+              <TableHead className="text-zinc-500 text-right">Good Items</TableHead>
               <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
@@ -1006,16 +1339,48 @@ export default function LotsPage() {
                   </TableCell>
                   <TableCell className="text-zinc-400 text-sm font-mono">{lot.production_orders?.order_number ?? <span className="text-zinc-600">—</span>}</TableCell>
                   <TableCell className="text-zinc-400 text-sm">{lot.clients?.name ?? <span className="text-zinc-600">—</span>}</TableCell>
-                  <TableCell className="text-zinc-400 text-sm text-right">{fmt(lot.item_count)}</TableCell>
+                  <TableCell className="text-right">
+                    {(() => {
+                      const good = goodCounts[lot.lot_number];
+                      const raw = lot.item_count ?? 0;
+                      const hasDiscrepancy = good !== undefined && good !== raw;
+                      return (
+                        <div className="flex flex-col items-end gap-0">
+                          <span className="text-sm font-semibold tabular-nums text-zinc-200">{good !== undefined ? fmt(good) : fmt(raw)}</span>
+                          {hasDiscrepancy && (
+                            <span className="text-[10px] text-zinc-600 tabular-nums" title="Raw import count (includes items with issues/bad status)">
+                              {fmt(raw)} imported
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </TableCell>
                   <TableCell>
-                    <button
-                      onClick={() => handleDeleteLot(lot)}
-                      disabled={deleteLotImport.isPending}
-                      className="p-1 text-zinc-600 hover:text-red-400 transition-colors disabled:opacity-40"
-                      title={`Delete LOT ${lot.lot_number} and all items`}
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => { setEditLot(lot); setAddingForPart(null); setAddCount(""); setAddStartSerial("1"); }}
+                        className="p-1 text-zinc-600 hover:text-zinc-300 transition-colors"
+                        title={`Edit items in LOT ${lot.lot_number}`}
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => openLocationEdit(lot)}
+                        className="p-1 text-zinc-600 hover:text-blue-400 transition-colors"
+                        title={`Edit location for LOT ${lot.lot_number}`}
+                      >
+                        <MapPin className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => handleDeleteLot(lot)}
+                        disabled={deleteLotImport.isPending}
+                        className="p-1 text-zinc-600 hover:text-red-400 transition-colors disabled:opacity-40"
+                        title={`Delete LOT ${lot.lot_number} and all items`}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
                   </TableCell>
                 </TableRow>
               );
@@ -1023,6 +1388,40 @@ export default function LotsPage() {
           </TableBody>
         </Table>
       </div>
+
+      {/* ── Edit LOT Items Dialog ── */}
+      <EditLotDialog lot={editLot} onClose={() => setEditLot(null)} />
+
+      {/* ── Location Edit Dialog ── */}
+      <Dialog open={!!locationEditLot} onOpenChange={(o) => { if (!o) setLocationEditLot(null); }}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-xs">
+          <DialogHeader>
+            <DialogTitle>Edit Location — {locationEditLot?.lot_number}</DialogTitle>
+            <p className="text-zinc-500 text-sm">Updates the location of all manufactured items in this LOT.</p>
+          </DialogHeader>
+          <div className="space-y-4 pt-2">
+            <div className="space-y-1.5">
+              <Label className="text-zinc-400 text-xs">Location</Label>
+              <Select value={locationEditValue} onValueChange={(v) => setLocationEditValue(v as ManufacturedItemLocation)}>
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700">
+                  <SelectItem value="SUPPLIER" className="text-zinc-100">Supplier</SelectItem>
+                  <SelectItem value="GBX" className="text-zinc-100">GBX</SelectItem>
+                  <SelectItem value="CLIENT" className="text-zinc-100">Client</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex gap-2 justify-end">
+              <Button variant="ghost" size="sm" onClick={() => setLocationEditLot(null)} className="text-zinc-400">Cancel</Button>
+              <Button size="sm" onClick={handleSaveLocation} disabled={updateLotLocation.isPending} className="bg-[#16a34a] hover:bg-[#15803d] text-white">
+                Save
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Import LOT Dialog ── */}
       <Dialog open={importOpen} onOpenChange={setImportOpen}>
@@ -1147,7 +1546,7 @@ export default function LotsPage() {
                 <span className="text-xs font-semibold bg-zinc-700 text-zinc-300 rounded-full w-5 h-5 flex items-center justify-center">2</span>
                 <Label className="text-zinc-300">Serial Number File <span className="text-zinc-500 font-normal">(.csv or .xlsx)</span></Label>
                 {parsedItems && !crossRefChecks && <CheckCircle2 className="h-4 w-4 text-green-400" />}
-                {crossRefChecks && crossRefChecks.every(c => c.passed) && <CheckCircle2 className="h-4 w-4 text-green-400" />}
+                {crossRefChecks && crossRefChecks.every(c => c.fulfilled) && <CheckCircle2 className="h-4 w-4 text-green-400" />}
               </div>
               <div
                 onClick={() => importLot.trim() && snFileRef.current?.click()}
@@ -1198,6 +1597,63 @@ export default function LotsPage() {
                 </div>
               )}
 
+              {/* Box Breakdown */}
+              {parsedItems && parsedItems.length > 0 && (() => {
+                // Group clean (non-exception) items by part → box_label → serials
+                const byPart: Record<string, Record<string, string[]>> = {};
+                const exceptionByPart: Record<string, number> = {};
+                for (const item of parsedItems) {
+                  const pn = item.part_number;
+                  if (item._isException) {
+                    exceptionByPart[pn] = (exceptionByPart[pn] ?? 0) + 1;
+                    continue;
+                  }
+                  const box = item.box_label ?? "—";
+                  if (!byPart[pn]) byPart[pn] = {};
+                  if (!byPart[pn][box]) byPart[pn][box] = [];
+                  byPart[pn][box].push(item.serial_number);
+                }
+                const parts = Object.keys(byPart).sort();
+                if (parts.length === 0) return null;
+                return (
+                  <div className="bg-zinc-800/60 rounded-lg p-3 space-y-3">
+                    <p className="text-zinc-500 text-xs font-medium uppercase tracking-wider">Box Breakdown</p>
+                    {parts.map(pn => {
+                      const boxes = byPart[pn];
+                      const getBoxNum = (s: string) => parseInt(s.match(/(\d+)\/\d+/)?.[1] ?? "0") || parseInt(s) || 0;
+                      const sortedBoxes = Object.entries(boxes).sort((a, b) => getBoxNum(a[0]) - getBoxNum(b[0]));
+                      const totalClean = sortedBoxes.reduce((s, [, sns]) => s + sns.length, 0);
+                      const exceptions = exceptionByPart[pn] ?? 0;
+                      return (
+                        <div key={pn}>
+                          <div className="flex items-baseline gap-2 mb-1">
+                            <span className="text-zinc-200 text-xs font-mono font-semibold">{pn}</span>
+                            <span className="text-zinc-500 text-[10px]">{totalClean} items · {sortedBoxes.length} boxes{exceptions > 0 ? ` · ${exceptions} excluded` : ""}</span>
+                          </div>
+                          <div className="space-y-0.5 pl-2 max-h-48 overflow-y-auto">
+                            {sortedBoxes.map(([box, sns]) => {
+                              const nums = sns.map(s => parseInt(s, 10)).filter(n => !isNaN(n)).sort((a, b) => a - b);
+                              const min = nums[0];
+                              const max = nums[nums.length - 1];
+                              const isContiguous = max - min + 1 === nums.length;
+                              return (
+                                <div key={box} className="grid text-[10px] font-mono" style={{ gridTemplateColumns: "7rem 3.5rem 1fr" }}>
+                                  <span className="text-amber-400">{box}</span>
+                                  <span className="text-zinc-500">{sns.length} pcs</span>
+                                  <span className="text-zinc-600">
+                                    {isContiguous ? `${min}–${max}` : `${min}–${max} (${nums.length})`}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
               {/* Duplicate check */}
               {(checkingDuplicates || duplicates !== null) && (
                 <div className={`rounded-lg p-3 space-y-2 ${duplicates && duplicates.length > 0 ? "bg-red-500/10 border border-red-500/20" : "bg-zinc-800/60"}`}>
@@ -1245,14 +1701,37 @@ export default function LotsPage() {
 
               {/* Cross-reference */}
               {crossRefChecks && (
-                <div className="bg-zinc-800/60 rounded-lg p-3 space-y-2">
-                  <p className="text-zinc-500 text-xs font-medium uppercase tracking-wider mb-2">Cross-Reference vs Packing List <span className="text-zinc-600 normal-case">(ADDED only)</span></p>
-                  {crossRefChecks.map((check, i) => (
-                    <div key={i} className="flex items-start gap-2">
-                      <CheckIcon passed={check.passed} />
-                      <div className="flex-1 min-w-0">
-                        <span className="text-zinc-300 text-xs font-mono">{check.label}</span>
-                        <span className={`text-xs ml-2 ${check.passed ? "text-zinc-500" : "text-red-400"}`}>{check.detail}</span>
+                <div className="bg-zinc-800/60 rounded-lg p-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <p className="text-zinc-500 text-xs font-medium uppercase tracking-wider">Cross-Reference vs Packing List</p>
+                    {crossRefChecks.every(c => c.fulfilled)
+                      ? <span className="text-xs text-green-400 font-medium flex items-center gap-1"><CheckCircle2 className="h-3 w-3" /> All fulfilled</span>
+                      : <span className="text-xs text-red-400 font-medium">× {crossRefChecks.filter(c => !c.fulfilled).length} failed</span>
+                    }
+                  </div>
+                  {crossRefChecks.map((row, i) => (
+                    <div key={i} className="space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <CheckIcon passed={row.fulfilled} />
+                        <span className="text-zinc-200 text-xs font-mono font-semibold">{row.partNumber}</span>
+                      </div>
+                      <div className="ml-6 grid grid-cols-3 gap-x-3 gap-y-0.5 text-[11px]">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-zinc-500 uppercase tracking-wide">Parsed</span>
+                          <span className="text-zinc-300 font-medium">{row.parsed}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-zinc-500 uppercase tracking-wide">PL Fulfill</span>
+                          <span className={`font-semibold ${row.fulfilled ? "text-green-400" : "text-red-400"}`}>
+                            {row.clean}/{row.plExpected}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-zinc-500 uppercase tracking-wide">Issues</span>
+                          <span className={`font-semibold ${row.issues > 0 ? "text-amber-400" : "text-zinc-500"}`}>
+                            {row.issues}
+                          </span>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -1260,12 +1739,121 @@ export default function LotsPage() {
               )}
             </div>
 
+            {/* Issues Overview */}
+            {(() => {
+              const newIssueItems = (parsedItems ?? []).filter((i) => i.issue);
+              const allIssueNames = Array.from(new Set([
+                ...pendingDbIssues.map((i) => i.issue!),
+                ...newIssueItems.map((i) => i.issue!),
+              ])).sort();
+              if (allIssueNames.length === 0) return null;
+              const totalAffected = pendingDbIssues.length + newIssueItems.length;
+              return (
+                <>
+                  <Separator className="bg-zinc-800" />
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Issues Overview</p>
+                      <span className="text-amber-400 text-xs flex items-center gap-1 font-medium">
+                        <AlertTriangle className="h-3.5 w-3.5" />
+                        {totalAffected} items affected
+                      </span>
+                    </div>
+                    <div className="space-y-1">
+                      {allIssueNames.map((issueName) => {
+                        const dbItems = pendingDbIssues.filter((i) => i.issue === issueName);
+                        const newItems = newIssueItems.filter((i) => i.issue === issueName);
+                        const total = dbItems.length + newItems.length;
+                        const expanded = expandedIssues.has(issueName);
+                        // Group DB items by part_number for sub-rows
+                        const byPart = dbItems.reduce((acc, item) => {
+                          if (!acc[item.part_number]) acc[item.part_number] = [];
+                          acc[item.part_number].push(item);
+                          return acc;
+                        }, {} as Record<string, typeof dbItems>);
+                        // Also include new (not-yet-imported) items by part
+                        const newByPart = newItems.reduce((acc, item) => {
+                          if (!acc[item.part_number]) acc[item.part_number] = [];
+                          acc[item.part_number].push(item);
+                          return acc;
+                        }, {} as Record<string, typeof newItems>);
+                        const allParts = Array.from(new Set([...Object.keys(byPart), ...Object.keys(newByPart)])).sort();
+                        return (
+                          <div key={issueName} className="border border-zinc-700 rounded-lg overflow-hidden">
+                            <div className="flex items-center gap-2 px-3 py-2 bg-zinc-800/60">
+                              <button
+                                type="button"
+                                onClick={() => toggleExpandIssue(issueName)}
+                                className="text-zinc-500 hover:text-zinc-300 shrink-0"
+                              >
+                                {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                              </button>
+                              <span className="text-red-400 font-semibold text-sm flex-1 uppercase">{issueName}</span>
+                              <span className="text-zinc-500 text-xs mr-2">({total})</span>
+                              {dbItems.length > 0 && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-6 text-xs px-2 border-zinc-600 text-zinc-300 hover:bg-zinc-700"
+                                  disabled={resolveIssues.isPending}
+                                  onClick={() => resolveIssues.mutate(dbItems.map((i) => i.id))}
+                                >
+                                  Resolve All
+                                </Button>
+                              )}
+                              {dbItems.length === 0 && newItems.length > 0 && (
+                                <span className="text-xs text-amber-500/70 italic">this import</span>
+                              )}
+                            </div>
+                            {expanded && allParts.map((part) => {
+                              const dbPartItems = byPart[part] ?? [];
+                              const newPartItems = newByPart[part] ?? [];
+                              const partTotal = dbPartItems.length + newPartItems.length;
+                              return (
+                                <div key={part} className="flex items-center gap-2 px-3 py-1.5 border-t border-zinc-700/50 bg-zinc-800/20">
+                                  <ChevronRight className="h-3 w-3 text-zinc-600 ml-5 shrink-0" />
+                                  <span className="font-mono text-zinc-300 text-xs flex-1">{part}</span>
+                                  <span className="text-zinc-500 text-xs mr-2">({partTotal})</span>
+                                  {dbPartItems.length > 0 && (
+                                    <Button
+                                      size="sm"
+                                      variant="outline"
+                                      className="h-6 text-xs px-2 border-zinc-700 text-zinc-400 hover:bg-zinc-700"
+                                      disabled={resolveIssues.isPending}
+                                      onClick={() => resolveIssues.mutate(dbPartItems.map((i) => i.id))}
+                                    >
+                                      Resolve
+                                    </Button>
+                                  )}
+                                  {dbPartItems.length === 0 && (
+                                    <span className="text-xs text-amber-500/70 italic text-right">new</span>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+
             {/* Actions */}
             <div className="flex gap-3 pt-1">
               <Button type="button" variant="outline" className="flex-1 border-zinc-700 text-zinc-300 hover:bg-zinc-800" onClick={() => setImportOpen(false)}>Cancel</Button>
-              <Button disabled={!parsedItems || isImporting} onClick={handleImportConfirm} className="flex-1 bg-[#16a34a] hover:bg-[#15803d] text-white">
-                {isImporting ? "Saving..." : parsedItems ? `Import ${fmt(parsedItems.length)} Items` : "Import"}
-              </Button>
+              {(() => {
+                const cleanCount = parsedItems ? parsedItems.filter(i => !i._isException).length : 0;
+                const issueCount = parsedItems ? parsedItems.filter(i => i._isException).length : 0;
+                return (
+                  <Button disabled={!parsedItems || isImporting} onClick={handleImportConfirm} className="flex-1 bg-[#16a34a] hover:bg-[#15803d] text-white">
+                    {isImporting ? "Saving..." : parsedItems
+                      ? `Import ${fmt(cleanCount)} PL Items${issueCount > 0 ? ` (${fmt(issueCount)} with issues excluded)` : ""}`
+                      : "Import"}
+                  </Button>
+                );
+              })()}
             </div>
           </div>
         </DialogContent>

@@ -11,16 +11,13 @@ import {
   CheckSquare,
   Layers,
   LogOut,
-  Wrench,
-  ChevronRight,
-  FileCode2,
+  ListTodo,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "sonner";
 import { SettingsDialog } from "@/components/layout/settings-dialog";
 import { DeployButton } from "@/components/layout/deploy-button";
@@ -34,18 +31,17 @@ const navItems = [
   { href: "/manufactured", icon: CheckSquare, label: "Manufactured" },
   { href: "/stock", icon: Package, label: "Stock" },
   { href: "/kits", icon: Layers, label: "Kits" },
-  { href: "/tickets", icon: TicketIcon, label: "Tickets", badge: true },
-];
+  { href: "/tickets", icon: TicketIcon, label: "Tickets", badge: "tickets" },
+  { href: "/tasks", icon: ListTodo, label: "Tasks", badge: "tasks" },
+] as const;
 
-const toolItems = [
-  { href: "/tools/file-converter", icon: FileCode2, label: "LOT-TOOL", description: "Import & create LOTs from factory files" },
-];
 
 export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [openTicketCount, setOpenTicketCount] = useState<number>(0);
+  const [overdueTaskCount, setOverdueTaskCount] = useState<number>(0);
   const { data: profile } = useProfile();
 
   const roleConfig = profile?.role ? ROLE_CONFIG[profile.role] : null;
@@ -54,8 +50,6 @@ export function Sidebar() {
     ({ href }) => !profile?.role || canAccess(profile.role, href)
   );
 
-  const canAccessTools = !profile?.role || canAccess(profile.role, "/tools");
-  const isToolsActive = pathname.startsWith("/tools");
 
   useEffect(() => {
     const supabase = createClient();
@@ -66,29 +60,43 @@ export function Sidebar() {
       } = await supabase.auth.getUser();
       setUserEmail(user?.email ?? null);
 
-      const { count } = await supabase
+      const { count: ticketCount } = await supabase
         .from("tickets")
         .select("*", { count: "exact", head: true })
         .in("status", ["OPEN", "IN_PROGRESS"]);
+      setOpenTicketCount(ticketCount ?? 0);
 
-      setOpenTicketCount(count ?? 0);
+      const today = new Date().toISOString().split("T")[0];
+      const { count: taskCount } = await supabase
+        .from("tasks")
+        .select("*", { count: "exact", head: true })
+        .neq("status", "DONE")
+        .lte("due_date", today)
+        .not("due_date", "is", null);
+      setOverdueTaskCount(taskCount ?? 0);
     }
 
     loadData();
 
     const channel = supabase
-      .channel("sidebar-tickets")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "tickets" },
-        () => {
-          supabase
-            .from("tickets")
-            .select("*", { count: "exact", head: true })
-            .in("status", ["OPEN", "IN_PROGRESS"])
-            .then(({ count }) => setOpenTicketCount(count ?? 0));
-        }
-      )
+      .channel("sidebar-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "tickets" }, () => {
+        supabase
+          .from("tickets")
+          .select("*", { count: "exact", head: true })
+          .in("status", ["OPEN", "IN_PROGRESS"])
+          .then(({ count }) => setOpenTicketCount(count ?? 0));
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, () => {
+        const today = new Date().toISOString().split("T")[0];
+        supabase
+          .from("tasks")
+          .select("*", { count: "exact", head: true })
+          .neq("status", "DONE")
+          .lte("due_date", today)
+          .not("due_date", "is", null)
+          .then(({ count }) => setOverdueTaskCount(count ?? 0));
+      })
       .subscribe();
 
     return () => {
@@ -131,62 +139,20 @@ export function Sidebar() {
             >
               <Icon className="h-4 w-4 flex-shrink-0" />
               <span className="flex-1 uppercase">{label}</span>
-              {badge && openTicketCount > 0 && (
+              {badge === "tickets" && openTicketCount > 0 && (
                 <Badge className="bg-amber-400/15 text-amber-400 border border-amber-400/20 text-xs px-1.5 py-0 h-5">
                   {openTicketCount}
+                </Badge>
+              )}
+              {badge === "tasks" && overdueTaskCount > 0 && (
+                <Badge className="bg-red-400/15 text-red-400 border border-red-400/20 text-xs px-1.5 py-0 h-5">
+                  {overdueTaskCount}
                 </Badge>
               )}
             </Link>
           );
         })}
 
-        {/* Tools */}
-        {canAccessTools && (
-          <Popover>
-            <PopoverTrigger asChild>
-              <button
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors w-full",
-                  isToolsActive
-                    ? "bg-[#16a34a]/15 text-[#16a34a]"
-                    : "text-gray-500 dark:text-zinc-400 hover:text-gray-900 dark:hover:text-zinc-100 hover:bg-gray-100 dark:hover:bg-zinc-800"
-                )}
-              >
-                <Wrench className="h-4 w-4 flex-shrink-0" />
-                <span className="flex-1 text-left uppercase">Tools</span>
-                <ChevronRight className="h-3.5 w-3.5 opacity-50" />
-              </button>
-            </PopoverTrigger>
-            <PopoverContent
-              side="right"
-              align="start"
-              sideOffset={8}
-              className="w-56 p-1.5 bg-zinc-900 border-zinc-700"
-            >
-              <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-2 py-1 mb-0.5">
-                Tools
-              </p>
-              {toolItems.map(({ href, icon: Icon, label, description }) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className={cn(
-                    "flex items-start gap-2.5 px-2 py-2 rounded-md transition-colors",
-                    pathname.startsWith(href)
-                      ? "bg-[#16a34a]/15 text-[#16a34a]"
-                      : "text-zinc-300 hover:text-zinc-100 hover:bg-zinc-800"
-                  )}
-                >
-                  <Icon className="h-4 w-4 flex-shrink-0 mt-0.5 text-zinc-400" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium leading-none">{label}</p>
-                    <p className="text-[10px] text-zinc-500 mt-0.5">{description}</p>
-                  </div>
-                </Link>
-              ))}
-            </PopoverContent>
-          </Popover>
-        )}
       </nav>
 
       <Separator className="bg-gray-200 dark:bg-zinc-800" />

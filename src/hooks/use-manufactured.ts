@@ -37,29 +37,74 @@ export function useManufacturedItems() {
   });
 }
 
+export function useDistinctManufacturedPartNumbers() {
+  return useQuery({
+    queryKey: ["manufactured_items", "part_numbers"],
+    staleTime: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("manufactured_items")
+        .select("part_number")
+        .order("part_number", { ascending: true });
+      if (error) throw error;
+      const unique = [...new Set((data ?? []).map((r: { part_number: string }) => r.part_number))];
+      return unique;
+    },
+  });
+}
+
+export function useDistinctManufacturedLotNumbers() {
+  return useQuery({
+    queryKey: ["manufactured_items", "lot_numbers"],
+    staleTime: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("manufactured_items")
+        .select("lot_number")
+        .not("lot_number", "is", null)
+        .order("lot_number", { ascending: true });
+      if (error) throw error;
+      const unique = [...new Set((data ?? []).map((r: { lot_number: string }) => r.lot_number))];
+      return unique;
+    },
+  });
+}
+
 export function useManufacturedItemsPaginated(params: {
   page: number;
   pageSize: number;
   status: ManufacturedItemStatus | "ALL";
   search: string;
   clientId: string;
+  hasIssue?: boolean;
+  hasNoIssue?: boolean;
+  hasTicket?: boolean;
+  partNumbers?: string[];
+  lotNumbers?: string[];
+  sortCol?: string;
+  sortDir?: "asc" | "desc";
 }) {
-  const { page, pageSize, status, search, clientId } = params;
+  const { page, pageSize, status, search, clientId, hasIssue, hasNoIssue, hasTicket, partNumbers, lotNumbers, sortCol = "created_at", sortDir = "desc" } = params;
   return useQuery({
-    queryKey: ["manufactured_items", "paginated", page, pageSize, status, search, clientId],
+    queryKey: ["manufactured_items", "paginated", page, pageSize, status, search, clientId, hasIssue, hasNoIssue, hasTicket, partNumbers, lotNumbers, sortCol, sortDir],
     queryFn: async () => {
+      const ticketsSelect = hasTicket ? "tickets!inner(count)" : "tickets(count)";
       let query = supabase
         .from("manufactured_items")
-        .select("*, clients(id, name)", { count: "exact" })
-        .order("created_at", { ascending: false })
+        .select(`*, clients(id, name), ${ticketsSelect}`, { count: "exact" })
+        .order(sortCol, { ascending: sortDir === "asc" })
         .range(page * pageSize, (page + 1) * pageSize - 1);
 
       if (status !== "ALL") query = query.eq("status", status);
+      if (hasIssue) query = query.not("issue", "is", null).not("issue", "eq", "OK");
+      if (hasNoIssue) query = query.or("issue.is.null,issue.eq.OK");
       if (search.trim()) {
         const q = search.trim();
         query = query.or(`part_number.ilike.%${q}%,serial_number.ilike.%${q}%,lot_number.ilike.%${q}%`);
       }
       if (clientId) query = query.eq("client_id", clientId);
+      if (partNumbers && partNumbers.length > 0) query = query.in("part_number", partNumbers);
+      if (lotNumbers && lotNumbers.length > 0) query = query.in("lot_number", lotNumbers);
 
       const { data, error, count } = await query;
       if (error) throw error;
@@ -93,9 +138,11 @@ export function useBulkCreateManufacturedItems() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (items: CreateManufacturedItemInput[]) => {
+      if (items.length === 0) return;
+
       const { error } = await supabase
         .from("manufactured_items")
-        .upsert(items, { onConflict: "part_number,serial_number", ignoreDuplicates: true });
+        .upsert(items, { onConflict: "part_number,serial_number" });
       if (error) throw error;
     },
     onSuccess: () => {
@@ -128,6 +175,24 @@ export function useUpdateManufacturedItem() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["manufactured_items"] });
       toast.success("Item updated");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
+export function useUpdateLotItemsLocation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ lotNumber, location }: { lotNumber: string; location: ManufacturedItemLocation }) => {
+      const { error } = await supabase
+        .from("manufactured_items")
+        .update({ location })
+        .eq("lot_number", lotNumber);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["manufactured_items"] });
+      toast.success("Location updated");
     },
     onError: (e: Error) => toast.error(e.message),
   });
@@ -235,6 +300,50 @@ export function useDeleteLotImport() {
   });
 }
 
+export function useOrderPendingIssues(orderId: string, enabled = true) {
+  return useQuery({
+    queryKey: ["manufactured_items", "pending_issues", orderId],
+    enabled: !!orderId && enabled,
+    queryFn: async () => {
+      // Resolve via lot_imports (production_order_id is on the lot, not on individual items)
+      const { data: lots, error: lotsErr } = await supabase
+        .from("lot_imports")
+        .select("lot_number")
+        .eq("production_order_id", orderId);
+      if (lotsErr) throw lotsErr;
+      const lotNumbers = (lots ?? []).map((l: { lot_number: string }) => l.lot_number).filter(Boolean);
+      if (lotNumbers.length === 0) return [];
+      const { data, error } = await supabase
+        .from("manufactured_items")
+        .select("id, part_number, serial_number, lot_number, issue")
+        .in("lot_number", lotNumbers)
+        .not("issue", "is", null)
+        .order("issue")
+        .order("part_number");
+      if (error) throw error;
+      return data as Pick<ManufacturedItem, "id" | "part_number" | "serial_number" | "lot_number" | "issue">[];
+    },
+  });
+}
+
+export function useResolveIssues() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (ids: string[]) => {
+      const { error } = await supabase
+        .from("manufactured_items")
+        .update({ issue: null })
+        .in("id", ids);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["manufactured_items"] });
+      toast.success("Issues resolved");
+    },
+    onError: (e: Error) => toast.error(e.message),
+  });
+}
+
 export function useLotImportsByOrder(orderId: string) {
   return useQuery({
     queryKey: ["lot_imports", "order", orderId],
@@ -248,6 +357,92 @@ export function useLotImportsByOrder(orderId: string) {
       return data as LotImport[];
     },
     enabled: !!orderId,
+  });
+}
+
+/** Returns good-item counts per lot_number (same filter as useOrderFulfillmentDetail). */
+export function useManufacturedLotCounts(lotNumbers: string[]) {
+  return useQuery({
+    queryKey: ["manufactured_items", "lot_good_counts", lotNumbers],
+    enabled: lotNumbers.length > 0,
+    queryFn: async () => {
+      const results: { lot_number: string }[] = [];
+      let page = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("manufactured_items")
+          .select("lot_number")
+          .in("lot_number", lotNumbers)
+          .not("status", "in", '("BAD","MANUAL","EXTRA")')
+          .or("issue.is.null,issue.eq.OK")
+          .range(page * 1000, (page + 1) * 1000 - 1);
+        if (error) throw error;
+        results.push(...(data ?? []));
+        if ((data ?? []).length < 1000) break;
+        page++;
+      }
+      const counts: Record<string, number> = {};
+      for (const r of results) {
+        counts[r.lot_number] = (counts[r.lot_number] ?? 0) + 1;
+      }
+      return counts;
+    },
+  });
+}
+
+export function useLotItemCounts(lotNumber: string | null) {
+  return useQuery({
+    queryKey: ["manufactured_items", "lot_counts", lotNumber],
+    enabled: !!lotNumber,
+    queryFn: async () => {
+      // Paginate — lot can have 1000+ items
+      const results: { part_number: string }[] = [];
+      let page = 0;
+      while (true) {
+        const { data, error } = await supabase
+          .from("manufactured_items")
+          .select("part_number")
+          .eq("lot_number", lotNumber!)
+          .range(page * 1000, (page + 1) * 1000 - 1);
+        if (error) throw error;
+        results.push(...(data ?? []));
+        if ((data ?? []).length < 1000) break;
+        page++;
+      }
+      const counts: Record<string, number> = {};
+      for (const r of results) {
+        counts[r.part_number] = (counts[r.part_number] ?? 0) + 1;
+      }
+      return Object.entries(counts)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([part_number, count]) => ({ part_number, count }));
+    },
+  });
+}
+
+export function useSubtractLotItems() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ lotNumber, partNumber, count }: { lotNumber: string; partNumber: string; count: number }) => {
+      const { data, error } = await supabase
+        .from("manufactured_items")
+        .select("id")
+        .eq("lot_number", lotNumber)
+        .eq("part_number", partNumber)
+        .order("created_at", { ascending: false })
+        .limit(count);
+      if (error) throw error;
+      const ids = (data ?? []).map((r: { id: string }) => r.id);
+      if (ids.length === 0) return 0;
+      const { error: delError } = await supabase.from("manufactured_items").delete().in("id", ids);
+      if (delError) throw delError;
+      return ids.length;
+    },
+    onSuccess: (removed) => {
+      qc.invalidateQueries({ queryKey: ["manufactured_items"] });
+      toast.success(`Removed ${removed} item${removed !== 1 ? "s" : ""}`);
+    },
+    onError: (e: Error) => toast.error(e.message),
   });
 }
 
