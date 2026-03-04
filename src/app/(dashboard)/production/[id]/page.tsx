@@ -336,17 +336,6 @@ export default function OrderDetailPage() {
                   </div>
                 </>
               )}
-              {order.manufacture_code && order.items && order.items.length > 0 && (
-                <>
-                  <Separator className="bg-zinc-800" />
-                  <Button size="sm" variant="outline"
-                    className="w-full border-zinc-700 text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100 gap-2"
-                    disabled={bulkCreate.isPending} onClick={handleGenerateItems}>
-                    <Wand2 className="h-3.5 w-3.5" />
-                    {bulkCreate.isPending ? "Generating..." : "Generate Items"}
-                  </Button>
-                </>
-              )}
             </CardContent>
           </Card>
         </div>
