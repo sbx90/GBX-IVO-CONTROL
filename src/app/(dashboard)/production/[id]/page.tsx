@@ -252,11 +252,11 @@ export default function OrderDetailPage() {
                 Order Details
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm">
+            <CardContent className="space-y-3 text-base">
               {order.items && order.items.length > 0 && (
                 <>
                   <div>
-                    <p className="text-zinc-500 text-xs mb-2 uppercase tracking-wider">Items</p>
+                    <p className="text-zinc-500 text-sm mb-2 uppercase tracking-wider">Items</p>
                     <div className="space-y-2">
                       {order.items.map((item, i) => {
                         const label =
@@ -271,8 +271,8 @@ export default function OrderDetailPage() {
                         return (
                           <div key={i}>
                             <div className="flex justify-between items-center">
-                              <span className={item.type === "KIT" ? "text-blue-400" : "text-amber-400"}>{label}</span>
-                              <span className="text-zinc-400 font-mono text-xs">×{item.quantity}</span>
+                              <span className={item.type === "KIT" ? "text-blue-400 text-base" : "text-amber-400 text-base"}>{label}</span>
+                              <span className="text-zinc-400 font-mono text-sm">×{item.quantity}</span>
                             </div>
                             {kitDef && kitDef.components.length > 0 && (
                               <div className="ml-3 mt-1 space-y-0.5 border-l border-zinc-700 pl-3">
@@ -284,10 +284,10 @@ export default function OrderDetailPage() {
                                   return (
                                     <div key={ci} className="space-y-0.5">
                                       <div className="flex justify-between items-center">
-                                        <span className="text-zinc-400 text-xs">{partNumber}</span>
-                                        <span className="text-zinc-500 font-mono text-xs">×{totalQty}</span>
+                                        <span className="text-zinc-400 text-sm">{partNumber}</span>
+                                        <span className="text-zinc-500 font-mono text-sm">×{totalQty}</span>
                                       </div>
-                                      {snStart && <p className="text-zinc-600 font-mono text-xs">S/N: {snStart} → {snEnd}</p>}
+                                      {snStart && <p className="text-zinc-600 font-mono text-sm">S/N: {snStart} → {snEnd}</p>}
                                     </div>
                                   );
                                 })}
@@ -311,28 +311,28 @@ export default function OrderDetailPage() {
                   onChange={(e) => setMfgCode(e.target.value.replace(/\D/g, ""))}
                   onBlur={saveMfgCode}
                   onKeyDown={(e) => e.key === "Enter" && saveMfgCode()}
-                  className="bg-transparent border-b border-zinc-700 text-zinc-200 text-xs font-mono w-16 text-right focus:outline-none focus:border-zinc-500 placeholder:text-zinc-600"
+                  className="bg-transparent border-b border-zinc-700 text-zinc-200 text-sm font-mono w-20 text-right focus:outline-none focus:border-zinc-500 placeholder:text-zinc-600"
                 />
               </div>
               <Separator className="bg-zinc-800" />
               <div className="flex justify-between">
                 <span className="text-zinc-500">Target</span>
-                <span className="text-zinc-400 text-xs">{order.target_date ? formatDate(order.target_date) : "—"}</span>
+                <span className="text-zinc-400 text-sm">{order.target_date ? formatDate(order.target_date) : "—"}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-zinc-500">Created</span>
-                <span className="text-zinc-400 text-xs">{formatDate(order.created_at)}</span>
+                <span className="text-zinc-400 text-sm">{formatDate(order.created_at)}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-zinc-500">Updated</span>
-                <span className="text-zinc-400 text-xs">{formatRelativeDate(order.updated_at)}</span>
+                <span className="text-zinc-400 text-sm">{formatRelativeDate(order.updated_at)}</span>
               </div>
               {order.notes && (
                 <>
                   <Separator className="bg-zinc-800" />
                   <div>
-                    <p className="text-zinc-500 text-xs mb-1">Notes</p>
-                    <p className="text-zinc-300 text-xs leading-relaxed">{order.notes}</p>
+                    <p className="text-zinc-500 text-sm mb-1">Notes</p>
+                    <p className="text-zinc-300 text-sm leading-relaxed">{order.notes}</p>
                   </div>
                 </>
               )}
