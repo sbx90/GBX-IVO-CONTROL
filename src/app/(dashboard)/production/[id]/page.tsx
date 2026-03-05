@@ -477,6 +477,14 @@ export default function OrderDetailPage() {
           {/* LOT Inventory Card */}
           {(() => {
             const LOT_STATUS_CLASSES: Record<LotStatus, string> = {
+              PRODUCTION:        "bg-yellow-500/15 text-yellow-400 border-yellow-500/20",
+              QA:                "bg-purple-500/15 text-purple-400 border-purple-500/20",
+              PACKED:            "bg-sky-500/15 text-sky-400 border-sky-500/20",
+              TRANSIT:           "bg-blue-500/15 text-blue-400 border-blue-500/20",
+              GBX_WAREHOUSE:     "bg-indigo-500/15 text-indigo-400 border-indigo-500/20",
+              FREIGHT_FORWARDER: "bg-cyan-500/15 text-cyan-400 border-cyan-500/20",
+              CLIENT_WAREHOUSE:  "bg-green-500/15 text-green-400 border-green-500/20",
+              // legacy
               DELIVERED:    "bg-green-500/15 text-green-400 border-green-500/20",
               IN_TRANSIT:   "bg-blue-500/15 text-blue-400 border-blue-500/20",
               AT_WAREHOUSE: "bg-amber-400/15 text-amber-400 border-amber-400/20",
