@@ -484,3 +484,15 @@ export interface CreateLotImportInput {
   serial_approved?: boolean;
   extra_units?: Record<string, number> | null;
 }
+
+export type NoteColor = 'zinc' | 'yellow' | 'blue' | 'green' | 'red' | 'purple';
+
+export interface Note {
+  id: string;
+  content: string;
+  color: NoteColor;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+

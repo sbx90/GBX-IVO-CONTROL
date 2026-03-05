@@ -12,6 +12,7 @@ import {
   Layers,
   LogOut,
   ListTodo,
+  StickyNote,
 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn } from "@/lib/utils";
@@ -40,6 +41,7 @@ const navItems: NavItem[] = [
   { href: "/kits", icon: Layers, label: "Kits" },
   { href: "/tickets", icon: TicketIcon, label: "Tickets", badge: "tickets" },
   { href: "/tasks", icon: ListTodo, label: "Tasks", badge: "tasks" },
+  { href: "/notes", icon: StickyNote, label: "Notes" },
 ];
 
 

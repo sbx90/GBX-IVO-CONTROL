@@ -11,28 +11,28 @@ export interface RoleConfig {
 export const ROLE_CONFIG: Record<UserRole, RoleConfig> = {
   admin: {
     label: 'Admin',
-    allowedRoutes: ['/', '/stock', '/kits', '/tickets', '/tasks', '/production', '/lots', '/manufactured', '/tools'],
+    allowedRoutes: ['/', '/stock', '/kits', '/tickets', '/tasks', '/notes', '/production', '/lots', '/manufactured', '/tools'],
     defaultRoute: '/',
     canDeploy: true,
     canAccessSettings: true,
   },
   stock_agent: {
     label: 'Stock Agent',
-    allowedRoutes: ['/stock', '/kits', '/tasks', '/production', '/lots', '/manufactured', '/tools'],
+    allowedRoutes: ['/stock', '/kits', '/tasks', '/notes', '/production', '/lots', '/manufactured', '/tools'],
     defaultRoute: '/stock',
     canDeploy: false,
     canAccessSettings: false,
   },
   ticket_agent: {
     label: 'Ticket Agent',
-    allowedRoutes: ['/tickets', '/tasks'],
+    allowedRoutes: ['/tickets', '/tasks', '/notes'],
     defaultRoute: '/tickets',
     canDeploy: false,
     canAccessSettings: false,
   },
   production_agent: {
     label: 'Production Agent',
-    allowedRoutes: ['/stock', '/kits', '/tasks', '/production', '/lots', '/manufactured', '/tools'],
+    allowedRoutes: ['/stock', '/kits', '/tasks', '/notes', '/production', '/lots', '/manufactured', '/tools'],
     defaultRoute: '/stock',
     canDeploy: false,
     canAccessSettings: false,
