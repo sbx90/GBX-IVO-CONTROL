@@ -1117,7 +1117,7 @@ export default function LotsPage() {
   const resolveIssues = useResolveIssues();
 
   // ── Sorting ──
-  type LotSortKey = "lot_number" | "created_at" | "lot_status" | "client" | "good_items";
+  type LotSortKey = "lot_number" | "created_at" | "lot_status" | "client" | "good_items" | "location";
   const [lotSortKey, setLotSortKey] = useState<LotSortKey>("created_at");
   const [lotSortDir, setLotSortDir] = useState<"asc" | "desc">("desc");
   function toggleLotSort(col: LotSortKey) {
@@ -1151,11 +1151,14 @@ export default function LotsPage() {
         case "good_items":
           cmp = (goodCounts[a.lot_number] ?? 0) - (goodCounts[b.lot_number] ?? 0);
           break;
+        case "location":
+          cmp = (lotLocations[a.lot_number] ?? "").localeCompare(lotLocations[b.lot_number] ?? "");
+          break;
       }
       return lotSortDir === "asc" ? cmp : -cmp;
     });
     return arr;
-  }, [lotImports, lotSortKey, lotSortDir, goodCounts]);
+  }, [lotImports, lotSortKey, lotSortDir, goodCounts, lotLocations]);
 
   // ── Edit LOT items state ──
   const [editLot, setEditLot] = useState<LotImport | null>(null);
@@ -1529,7 +1532,11 @@ export default function LotsPage() {
                   Client <LotSortIcon col="client" />
                 </button>
               </TableHead>
-              <TableHead className="text-zinc-500">Location</TableHead>
+              <TableHead className="text-zinc-500">
+                <button onClick={() => toggleLotSort("location")} className="flex items-center hover:text-zinc-200 transition-colors">
+                  Location <LotSortIcon col="location" />
+                </button>
+              </TableHead>
               <TableHead className="text-zinc-500 text-right">
                 <button onClick={() => toggleLotSort("good_items")} className="flex items-center justify-end hover:text-zinc-200 transition-colors w-full">
                   Good Items <LotSortIcon col="good_items" />
