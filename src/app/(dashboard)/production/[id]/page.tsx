@@ -398,7 +398,8 @@ export default function OrderDetailPage() {
           {/* Warnings first */}
           {(() => {
             const lotsWithExtra = orderLots.filter(l => l.extra_units && Object.keys(l.extra_units).length > 0);
-            const hasWarnings = pendingIssues.length > 0 || lotsWithExtra.length > 0;
+            const lotsWithMissing = orderLots.filter(l => l.missing_units && Object.keys(l.missing_units).length > 0);
+            const hasWarnings = pendingIssues.length > 0 || lotsWithExtra.length > 0 || lotsWithMissing.length > 0;
             if (!hasWarnings) return null;
             const issueNames = Array.from(new Set(pendingIssues.map((i) => i.issue!))).sort();
             return (
@@ -410,11 +411,35 @@ export default function OrderDetailPage() {
                       Warnings
                     </CardTitle>
                     <span className="text-xs text-amber-500 font-medium">
-                      {[pendingIssues.length > 0 && `${pendingIssues.length} unresolved`, lotsWithExtra.length > 0 && `${lotsWithExtra.length} LOT extra`].filter(Boolean).join(" · ")}
+                      {[
+                        pendingIssues.length > 0 && `${pendingIssues.length} unresolved`,
+                        lotsWithExtra.length > 0 && `${lotsWithExtra.length} LOT extra`,
+                        lotsWithMissing.length > 0 && `${lotsWithMissing.length} LOT missing`,
+                      ].filter(Boolean).join(" · ")}
                     </span>
                   </div>
                 </CardHeader>
                 <CardContent className="space-y-2 text-sm">
+                  {/* Missing units per LOT */}
+                  {lotsWithMissing.map(lot => {
+                    const total = Object.values(lot.missing_units!).reduce((s, n) => s + n, 0);
+                    return (
+                      <div key={`missing-${lot.id}`} className="border border-red-500/20 rounded-lg overflow-hidden">
+                        <div className="flex items-center gap-2 px-3 py-2 bg-red-500/5">
+                          <span className="text-red-400 font-semibold text-xs flex-1 uppercase">LOT {lot.lot_number} — -{total} missing units</span>
+                        </div>
+                        <div className="px-3 py-1.5 space-y-0.5">
+                          {Object.entries(lot.missing_units!).map(([part, count]) => (
+                            <div key={part} className="flex items-center gap-2 text-xs">
+                              <ChevronRight className="h-3 w-3 text-zinc-600 shrink-0" />
+                              <span className="font-mono text-zinc-400 flex-1 truncate">{part}</span>
+                              <span className="text-red-400 font-semibold">-{count}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
                   {/* Extra units per LOT */}
                   {lotsWithExtra.map(lot => {
                     const total = Object.values(lot.extra_units!).reduce((s, n) => s + n, 0);

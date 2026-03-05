@@ -1445,6 +1445,9 @@ export default function FileConverterPage() {
       const extraUnitsPayload = crossRefChecks
         ? Object.fromEntries(crossRefChecks.filter(r => r.extra > 0).map(r => [r.partNumber, r.extra]))
         : null;
+      const missingUnitsPayload = crossRefChecks
+        ? Object.fromEntries(crossRefChecks.filter(r => !r.fulfilled && r.plExpected > r.clean).map(r => [r.partNumber, r.plExpected - r.clean]))
+        : null;
 
       // Check if lot already exists
       const { data: existing } = await supabase
@@ -1464,6 +1467,7 @@ export default function FileConverterPage() {
             pl_approved: plApproved,
             serial_approved: serialApproved,
             extra_units: extraUnitsPayload && Object.keys(extraUnitsPayload).length > 0 ? extraUnitsPayload : null,
+            missing_units: missingUnitsPayload && Object.keys(missingUnitsPayload).length > 0 ? missingUnitsPayload : null,
           })
           .eq("id", existing.id);
         if (updateError) throw updateError;
@@ -1479,6 +1483,7 @@ export default function FileConverterPage() {
             pl_approved: plApproved,
             serial_approved: serialApproved,
             extra_units: extraUnitsPayload && Object.keys(extraUnitsPayload).length > 0 ? extraUnitsPayload : null,
+            missing_units: missingUnitsPayload && Object.keys(missingUnitsPayload).length > 0 ? missingUnitsPayload : null,
           });
         if (lotError) throw lotError;
       }
@@ -1522,6 +1527,8 @@ export default function FileConverterPage() {
 
   const allPlPassed = plChecks?.every(c => c.passed) ?? false;
   const allCrossRefPassed = crossRefChecks?.every(c => c.fulfilled) ?? false;
+  const hasMissingUnits = crossRefChecks?.some(c => !c.fulfilled) ?? false;
+  const totalMissing = (crossRefChecks ?? []).reduce((s, r) => s + Math.max(0, r.plExpected - r.clean), 0);
   const canDownload = parsedItems && parsedItems.length > 0 && lotNumber.trim();
   const issueItems = (parsedItems ?? []).filter(i => i.issue || i.status === "MANUAL");
   const hasIssues = issueItems.length > 0;
@@ -2114,26 +2121,31 @@ export default function FileConverterPage() {
             </button>
             <button
               type="button"
-              disabled={!allCrossRefPassed}
-              onClick={() => allCrossRefPassed && setSerialApproved(v => !v)}
+              onClick={() => setSerialApproved(v => !v)}
               className={cn(
                 "flex items-center gap-3 w-full px-3 py-2 rounded-lg border transition-colors text-left",
-                serialApproved
+                serialApproved && !hasMissingUnits
                   ? "border-green-500/40 bg-green-500/10 text-green-400"
-                  : allCrossRefPassed
-                  ? "border-zinc-600 text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800"
-                  : "border-zinc-800 text-zinc-600 cursor-not-allowed opacity-50"
+                  : serialApproved && hasMissingUnits
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-400"
+                  : "border-zinc-600 text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800"
               )}
             >
               <div className={cn("h-4 w-4 rounded border-2 flex items-center justify-center flex-shrink-0 transition-colors",
-                serialApproved ? "border-green-400 bg-green-400" : "border-zinc-600"
+                serialApproved && !hasMissingUnits ? "border-green-400 bg-green-400"
+                : serialApproved && hasMissingUnits ? "border-amber-400 bg-amber-400"
+                : "border-zinc-600"
               )}>
                 {serialApproved && <CheckCircle2 className="h-3 w-3 text-zinc-900" />}
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-xs font-medium">Serial Approved</p>
                 <p className="text-[10px] text-zinc-500">
-                  {allCrossRefPassed ? "Cross-reference checks passed — ready to approve" : "All serial cross-reference checks must pass first"}
+                  {allCrossRefPassed
+                    ? "Cross-reference checks passed — ready to approve"
+                    : hasMissingUnits
+                    ? `${totalMissing} unit${totalMissing !== 1 ? "s" : ""} missing — approving will add a warning to the Production Order`
+                    : "All serial cross-reference checks must pass first"}
                 </p>
               </div>
             </button>

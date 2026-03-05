@@ -496,6 +496,7 @@ export interface LotImport {
   pl_approved: boolean;
   serial_approved: boolean;
   extra_units: Record<string, number> | null; // { "PART_NUMBER": extra_count }
+  missing_units: Record<string, number> | null; // { "PART_NUMBER": missing_count }
   created_at: string;
   // Joined
   clients?: { id: string; name: string } | null;
@@ -513,6 +514,7 @@ export interface CreateLotImportInput {
   pl_approved?: boolean;
   serial_approved?: boolean;
   extra_units?: Record<string, number> | null;
+  missing_units?: Record<string, number> | null;
 }
 
 export type NoteColor = 'zinc' | 'yellow' | 'blue' | 'green' | 'red' | 'purple';
