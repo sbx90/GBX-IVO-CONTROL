@@ -618,7 +618,7 @@ export function useLookupItemBySerial() {
         .limit(1)
         .single();
       if (error) return null;
-      const item = data as ManufacturedItem & { clients: { id: string; name: string } | null };
+      const item = data as unknown as ManufacturedItem & { clients: { id: string; name: string } | null };
       // Mark as received (stock verified)
       if (!item.stock_verified_at) {
         await supabase.from("manufactured_items")
