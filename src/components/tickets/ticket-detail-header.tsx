@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -62,17 +61,39 @@ export function TicketDetailHeader({ ticket }: TicketDetailHeaderProps) {
             </Badge>
           </div>
           <h1 className="text-xl font-bold text-zinc-100">{ticket.title}</h1>
-          {ticket.kits && (
-            <p className="text-sm text-zinc-500 mt-1">
-              Kit:{" "}
-              <Link
-                href={`/stock/${ticket.kits.id}`}
-                className="text-[#16a34a] hover:text-[#9d8fff] font-mono"
-              >
-                {ticket.kits.serial_number}
-              </Link>
-            </p>
-          )}
+          {(() => {
+            const linkedItems = ticket.ticket_manufactured_items ?? [];
+            if (linkedItems.length > 0) {
+              return (
+                <p className="text-sm text-zinc-500 mt-1 flex items-center flex-wrap gap-1.5">
+                  <span>{linkedItems.length === 1 ? "Product:" : "Products:"}</span>
+                  {linkedItems.map(li => li.manufactured_items && (
+                    <span key={li.id} className="font-mono text-xs bg-zinc-800 text-zinc-300 px-1.5 py-0.5 rounded">
+                      {li.manufactured_items.part_number} · {li.manufactured_items.serial_number}
+                    </span>
+                  ))}
+                </p>
+              );
+            }
+            if (ticket.manufactured_items) {
+              return (
+                <p className="text-sm text-zinc-500 mt-1">
+                  Product:{" "}
+                  <span className="font-mono text-xs text-zinc-300">
+                    {ticket.manufactured_items.part_number} · {ticket.manufactured_items.serial_number}
+                  </span>
+                </p>
+              );
+            }
+            if (ticket.kits) {
+              return (
+                <p className="text-sm text-zinc-500 mt-1">
+                  Kit: <span className="text-[#16a34a] font-mono">{ticket.kits.serial_number}</span>
+                </p>
+              );
+            }
+            return null;
+          })()}
         </div>
 
         <div className="flex items-center gap-3">

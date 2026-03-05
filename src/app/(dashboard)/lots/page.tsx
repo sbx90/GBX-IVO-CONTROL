@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState, useRef, useMemo } from "react";
+import React, { useState, useRef, useMemo, useEffect } from "react";
 import Link from "next/link";
 import {
-  FileSpreadsheet, Upload, CheckCircle2, XCircle, Download, FileText, Trash2, AlertTriangle, FileCode2, Wrench, ChevronRight, ChevronDown, MapPin, Pencil, Plus,
+  FileSpreadsheet, Upload, CheckCircle2, XCircle, Download, FileText, Trash2, AlertTriangle, FileCode2, Wrench, ChevronRight, ChevronDown, MapPin, Pencil, Plus, Tag, ArrowUp, ArrowDown, ArrowUpDown,
 } from "lucide-react";
 import * as XLSX from "xlsx";
 import JSZip from "jszip";
@@ -20,6 +20,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -47,6 +52,7 @@ import {
   useLotItemCounts,
   useSubtractLotItems,
   useManufacturedLotCounts,
+  useLotLocations,
 } from "@/hooks/use-manufactured";
 import { useProductCatalog } from "@/hooks/use-product-catalog";
 import { useClients } from "@/hooks/use-clients";
@@ -54,6 +60,7 @@ import { useProductionOrders } from "@/hooks/use-production";
 import { useIssueDefinitions } from "@/hooks/use-issue-definitions";
 import { useKitDefinitions } from "@/hooks/use-kit-definitions";
 import { formatDate } from "@/lib/utils";
+import { LOCATION_OPTIONS, LOCATION_CONFIG } from "@/lib/constants";
 import type { ManufacturedItemStatus, ManufacturedItemLocation, CreateManufacturedItemInput, LotImport, LotStatus, IssueDefinition } from "@/lib/types/database";
 import type { GBXLotFile } from "@/app/(dashboard)/tools/file-converter/page";
 
@@ -703,14 +710,22 @@ function buildImportSummary(items: ParsedItem[]): Record<string, PartSummary> {
 
 // ─── Config ────────────────────────────────────────────────────────
 
-const ALL_LOT_STATUSES: LotStatus[] = ["DELIVERED", "IN_TRANSIT", "AT_WAREHOUSE", "AT_FACTORY", "DELAYED"];
+const ALL_LOT_STATUSES: LotStatus[] = ["PRODUCTION", "QA", "PACKED", "TRANSIT", "GBX_WAREHOUSE", "FREIGHT_FORWARDER", "CLIENT_WAREHOUSE"];
 
-const LOT_STATUS_CONFIG: Record<LotStatus, { label: string; className: string }> = {
-  DELIVERED:    { label: "Delivered",    className: "bg-green-500/15 text-green-400 border-0" },
-  IN_TRANSIT:   { label: "In Transit",   className: "bg-blue-500/15 text-blue-400 border-0" },
-  AT_WAREHOUSE: { label: "At Warehouse", className: "bg-amber-400/15 text-amber-400 border-0" },
-  AT_FACTORY:   { label: "At Factory",   className: "bg-zinc-700 text-zinc-300 border-0" },
-  DELAYED:      { label: "Delayed",      className: "bg-red-500/15 text-red-400 border-0" },
+const LOT_STATUS_CONFIG: Record<string, { label: string; className: string }> = {
+  PRODUCTION:        { label: "Production",        className: "bg-violet-500/15 text-violet-400 border-0" },
+  QA:                { label: "Q&A",               className: "bg-yellow-500/15 text-yellow-400 border-0" },
+  PACKED:            { label: "Packed",             className: "bg-zinc-500/15 text-zinc-300 border-0" },
+  TRANSIT:           { label: "Transit",            className: "bg-sky-500/15 text-sky-400 border-0" },
+  GBX_WAREHOUSE:     { label: "GBX Warehouse",      className: "bg-blue-500/15 text-blue-400 border-0" },
+  FREIGHT_FORWARDER: { label: "Freight-Forwarder",  className: "bg-cyan-500/15 text-cyan-400 border-0" },
+  CLIENT_WAREHOUSE:  { label: "Client Warehouse",   className: "bg-green-500/15 text-green-400 border-0" },
+  // legacy
+  DELIVERED:         { label: "Delivered",          className: "bg-green-500/15 text-green-400 border-0" },
+  IN_TRANSIT:        { label: "In Transit",         className: "bg-sky-500/15 text-sky-400 border-0" },
+  AT_WAREHOUSE:      { label: "At Warehouse",       className: "bg-amber-400/15 text-amber-400 border-0" },
+  AT_FACTORY:        { label: "At Factory",         className: "bg-zinc-700 text-zinc-300 border-0" },
+  DELAYED:           { label: "Delayed",            className: "bg-red-500/15 text-red-400 border-0" },
 };
 
 // ─── Helpers ───────────────────────────────────────────────────────
@@ -728,6 +743,7 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
   const { data: partCounts = [], isLoading } = useLotItemCounts(lot?.lot_number ?? null);
   const { data: catalog = [] } = useProductCatalog();
   const allPartNumbers = catalog.map((c) => c.part_number);
+  const { data: orders = [] } = useProductionOrders();
   const bulkCreate = useBulkCreateManufacturedItems();
   const updateLotImport = useUpdateLotImport();
   const subtractLotItems = useSubtractLotItems();
@@ -740,6 +756,11 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
   const [newPartNumber, setNewPartNumber] = useState("");
   const [newPartCount, setNewPartCount] = useState("");
   const [newPartStartSerial, setNewPartStartSerial] = useState("1");
+  const [selectedOrderId, setSelectedOrderId] = useState<string>(lot?.production_order_id ?? "none");
+
+  useEffect(() => {
+    setSelectedOrderId(lot?.production_order_id ?? "none");
+  }, [lot?.id]);
 
   function openRow(part: string, mode: "add" | "subtract") {
     setExpanded(expanded?.part === part && expanded.mode === mode ? null : { part, mode });
@@ -1003,6 +1024,33 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
             </div>
           )}
         </div>
+
+        {/* ── Production Order assignment ── */}
+        <div className="border-t border-zinc-800 pt-3 mt-1 space-y-1.5">
+          <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Production Order</label>
+          <Select
+            value={selectedOrderId}
+            onValueChange={(v) => {
+              if (!lot) return;
+              setSelectedOrderId(v);
+              updateLotImport.mutate({ id: lot.id, updates: { production_order_id: v === "none" ? null : v } });
+            }}
+          >
+            <SelectTrigger className="h-8 text-xs bg-zinc-800 border-zinc-700 text-zinc-100">
+              <SelectValue placeholder="No order assigned" />
+            </SelectTrigger>
+            <SelectContent className="bg-zinc-800 border-zinc-700">
+              <SelectItem value="none" className="text-xs text-zinc-400 focus:bg-zinc-700">
+                No order assigned
+              </SelectItem>
+              {orders.map((o) => (
+                <SelectItem key={o.id} value={o.id} className="text-xs text-zinc-200 focus:bg-zinc-700 font-mono">
+                  {o.order_number}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -1014,6 +1062,7 @@ export default function LotsPage() {
   const { data: lotImports = [] } = useLotImports();
   const lotNumbers = useMemo(() => lotImports.map((l) => l.lot_number).filter(Boolean) as string[], [lotImports]);
   const { data: goodCounts = {} } = useManufacturedLotCounts(lotNumbers);
+  const { data: lotLocations = {} } = useLotLocations(lotNumbers);
   const { data: clients = [] } = useClients();
   const { data: allOrders = [] } = useProductionOrders();
   const { data: issueDefinitions = [] } = useIssueDefinitions();
@@ -1029,16 +1078,57 @@ export default function LotsPage() {
   const bulkCreate = useBulkCreateManufacturedItems();
   const resolveIssues = useResolveIssues();
 
+  // ── Sorting ──
+  type LotSortKey = "lot_number" | "created_at" | "lot_status" | "client" | "good_items";
+  const [lotSortKey, setLotSortKey] = useState<LotSortKey>("created_at");
+  const [lotSortDir, setLotSortDir] = useState<"asc" | "desc">("desc");
+  function toggleLotSort(col: LotSortKey) {
+    if (lotSortKey === col) setLotSortDir(d => d === "asc" ? "desc" : "asc");
+    else { setLotSortKey(col); setLotSortDir("asc"); }
+  }
+  function LotSortIcon({ col }: { col: LotSortKey }) {
+    if (lotSortKey !== col) return <ArrowUpDown className="h-3 w-3 ml-1 opacity-30" />;
+    return lotSortDir === "asc" ? <ArrowUp className="h-3 w-3 ml-1 text-[#16a34a]" /> : <ArrowDown className="h-3 w-3 ml-1 text-[#16a34a]" />;
+  }
+  const sortedLots = useMemo(() => {
+    const arr = [...lotImports];
+    arr.sort((a, b) => {
+      let cmp = 0;
+      switch (lotSortKey) {
+        case "lot_number": {
+          const na = parseInt(a.lot_number.replace(/\D/g, "")) || 0;
+          const nb = parseInt(b.lot_number.replace(/\D/g, "")) || 0;
+          cmp = na - nb;
+          break;
+        }
+        case "created_at":
+          cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+          break;
+        case "lot_status":
+          cmp = (a.lot_status ?? "").localeCompare(b.lot_status ?? "");
+          break;
+        case "client":
+          cmp = (a.clients?.name ?? "").localeCompare(b.clients?.name ?? "");
+          break;
+        case "good_items":
+          cmp = (goodCounts[a.lot_number] ?? 0) - (goodCounts[b.lot_number] ?? 0);
+          break;
+      }
+      return lotSortDir === "asc" ? cmp : -cmp;
+    });
+    return arr;
+  }, [lotImports, lotSortKey, lotSortDir, goodCounts]);
+
   // ── Edit LOT items state ──
   const [editLot, setEditLot] = useState<LotImport | null>(null);
 
   // ── Location edit state ──
   const [locationEditLot, setLocationEditLot] = useState<LotImport | null>(null);
-  const [locationEditValue, setLocationEditValue] = useState<ManufacturedItemLocation>("GBX");
+  const [locationEditValue, setLocationEditValue] = useState<ManufacturedItemLocation>("FACTORY");
 
   function openLocationEdit(lot: LotImport) {
     setLocationEditLot(lot);
-    setLocationEditValue("GBX");
+    setLocationEditValue((lotLocations[lot.lot_number] as ManufacturedItemLocation) ?? "FACTORY");
   }
 
   function handleSaveLocation() {
@@ -1378,25 +1468,46 @@ export default function LotsPage() {
           <TableHeader>
             <TableRow className="border-zinc-800 hover:bg-transparent">
               <TableHead className="text-zinc-500 w-12">#</TableHead>
-              <TableHead className="text-zinc-500">LOT Name</TableHead>
-              <TableHead className="text-zinc-500">Date Created</TableHead>
+              <TableHead className="text-zinc-500">
+                <button onClick={() => toggleLotSort("lot_number")} className="flex items-center hover:text-zinc-200 transition-colors">
+                  LOT Name <LotSortIcon col="lot_number" />
+                </button>
+              </TableHead>
+              <TableHead className="text-zinc-500">
+                <button onClick={() => toggleLotSort("created_at")} className="flex items-center hover:text-zinc-200 transition-colors">
+                  Date Created <LotSortIcon col="created_at" />
+                </button>
+              </TableHead>
               <TableHead className="text-zinc-500 text-center">PL Approved</TableHead>
               <TableHead className="text-zinc-500 text-center">Serial Approved</TableHead>
-              <TableHead className="text-zinc-500">Status</TableHead>
+              <TableHead className="text-zinc-500">
+                <button onClick={() => toggleLotSort("lot_status")} className="flex items-center hover:text-zinc-200 transition-colors">
+                  Status <LotSortIcon col="lot_status" />
+                </button>
+              </TableHead>
               <TableHead className="text-zinc-500">Production Order</TableHead>
-              <TableHead className="text-zinc-500">Client</TableHead>
-              <TableHead className="text-zinc-500 text-right">Good Items</TableHead>
+              <TableHead className="text-zinc-500">
+                <button onClick={() => toggleLotSort("client")} className="flex items-center hover:text-zinc-200 transition-colors">
+                  Client <LotSortIcon col="client" />
+                </button>
+              </TableHead>
+              <TableHead className="text-zinc-500">Location</TableHead>
+              <TableHead className="text-zinc-500 text-right">
+                <button onClick={() => toggleLotSort("good_items")} className="flex items-center justify-end hover:text-zinc-200 transition-colors w-full">
+                  Good Items <LotSortIcon col="good_items" />
+                </button>
+              </TableHead>
               <TableHead className="w-10" />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {lotImports.length === 0 ? (
+            {sortedLots.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center text-zinc-500 py-12">
+                <TableCell colSpan={11} className="text-center text-zinc-500 py-12">
                   No lots yet. Click &quot;Import LOT&quot; to get started.
                 </TableCell>
               </TableRow>
-            ) : lotImports.map((lot, i) => {
+            ) : sortedLots.map((lot, i) => {
               const plApproved = lot.pl_approved ?? false;
               const serialApproved = lot.serial_approved ?? false;
               const lotStatus: LotStatus = lot.lot_status ?? "AT_FACTORY";
@@ -1424,23 +1535,20 @@ export default function LotsPage() {
                     </button>
                   </TableCell>
                   <TableCell>
-                    <Select value={lotStatus} onValueChange={(v) => handleStatusChange(lot, v as LotStatus)}>
-                      <SelectTrigger className="h-7 w-36 text-xs bg-transparent border-0 p-0 gap-1 focus:ring-0 [&>svg]:h-3 [&>svg]:w-3">
-                        <Badge className={`${LOT_STATUS_CONFIG[lotStatus].className} cursor-pointer`}>
-                          {LOT_STATUS_CONFIG[lotStatus].label}
-                        </Badge>
-                      </SelectTrigger>
-                      <SelectContent className="bg-zinc-800 border-zinc-700">
-                        {ALL_LOT_STATUSES.map((s) => (
-                          <SelectItem key={s} value={s} className="text-zinc-100 text-xs">
-                            {LOT_STATUS_CONFIG[s].label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Badge className={`${LOT_STATUS_CONFIG[lotStatus]?.className ?? "bg-zinc-700 text-zinc-300 border-0"}`}>
+                      {LOT_STATUS_CONFIG[lotStatus]?.label ?? lotStatus}
+                    </Badge>
                   </TableCell>
                   <TableCell className="text-zinc-400 text-sm font-mono">{lot.production_orders?.order_number ?? <span className="text-zinc-600">—</span>}</TableCell>
                   <TableCell className="text-zinc-400 text-sm">{lot.clients?.name ?? <span className="text-zinc-600">—</span>}</TableCell>
+                  <TableCell>
+                    {(() => {
+                      const loc = lotLocations[lot.lot_number];
+                      if (!loc) return <span className="text-zinc-600 text-xs">—</span>;
+                      const cfg = LOCATION_CONFIG[loc] ?? { label: loc, className: "bg-zinc-700 text-zinc-300" };
+                      return <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full whitespace-nowrap ${cfg.className}`}>{cfg.label}</span>;
+                    })()}
+                  </TableCell>
                   <TableCell className="text-right">
                     {(() => {
                       const good = goodCounts[lot.lot_number];
@@ -1474,6 +1582,32 @@ export default function LotsPage() {
                       >
                         <MapPin className="h-3.5 w-3.5" />
                       </button>
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <button
+                            className="p-1 text-zinc-600 hover:text-yellow-400 transition-colors"
+                            title={`Change status for LOT ${lot.lot_number}`}
+                          >
+                            <Tag className="h-3.5 w-3.5" />
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent className="bg-zinc-900 border-zinc-700 p-1.5 w-48" align="end">
+                          <p className="text-zinc-500 text-[10px] uppercase tracking-wider px-2 py-1">Set Status</p>
+                          {ALL_LOT_STATUSES.map((s) => (
+                            <button
+                              key={s}
+                              onClick={() => handleStatusChange(lot, s)}
+                              className={`w-full text-left px-2 py-1 rounded text-xs transition-colors ${
+                                lotStatus === s ? "bg-zinc-800" : "hover:bg-zinc-800/60"
+                              }`}
+                            >
+                              <Badge className={`${LOT_STATUS_CONFIG[s].className} pointer-events-none`}>
+                                {LOT_STATUS_CONFIG[s].label}
+                              </Badge>
+                            </button>
+                          ))}
+                        </PopoverContent>
+                      </Popover>
                       <button
                         onClick={() => handleDeleteLot(lot)}
                         disabled={deleteLotImport.isPending}
@@ -1509,9 +1643,11 @@ export default function LotsPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent className="bg-zinc-800 border-zinc-700">
-                  <SelectItem value="SUPPLIER" className="text-zinc-100">Supplier</SelectItem>
-                  <SelectItem value="GBX" className="text-zinc-100">GBX</SelectItem>
-                  <SelectItem value="CLIENT" className="text-zinc-100">Client</SelectItem>
+                  {LOCATION_OPTIONS.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value} className="text-zinc-100">
+                      {opt.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>

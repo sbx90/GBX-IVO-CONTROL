@@ -13,7 +13,34 @@ import type {
   MainboardSection,
   ProductUnitStatus,
   AssembledKitStatus,
+  ManufacturedItemLocation,
 } from './types/database';
+
+// ─────────────────────────────────────────────────────────────
+// Manufactured item location config
+// ─────────────────────────────────────────────────────────────
+
+export const LOCATION_OPTIONS: { value: ManufacturedItemLocation; label: string }[] = [
+  { value: 'FACTORY',            label: 'Factory' },
+  { value: 'TRANSIT',            label: 'Transit' },
+  { value: 'GBX_WAREHOUSE_CHINA',label: 'GBX Warehouse China' },
+  { value: 'GBX_WAREHOUSE',      label: 'GBX Warehouse' },
+  { value: 'FREIGHT_FORWARDER',  label: 'Freight-Forwarder' },
+  { value: 'CLIENT_WAREHOUSE',   label: 'Client Warehouse' },
+];
+
+export const LOCATION_CONFIG: Record<string, { label: string; className: string }> = {
+  FACTORY:             { label: 'Factory',             className: 'bg-amber-500/15 text-amber-400' },
+  TRANSIT:             { label: 'Transit',             className: 'bg-sky-500/15 text-sky-400' },
+  GBX_WAREHOUSE_CHINA: { label: 'GBX WH China',        className: 'bg-violet-500/15 text-violet-400' },
+  GBX_WAREHOUSE:       { label: 'GBX Warehouse',       className: 'bg-indigo-500/15 text-indigo-400' },
+  FREIGHT_FORWARDER:   { label: 'Freight-Forwarder',   className: 'bg-cyan-500/15 text-cyan-400' },
+  CLIENT_WAREHOUSE:    { label: 'Client Warehouse',    className: 'bg-green-500/15 text-green-400' },
+  // legacy
+  SUPPLIER:            { label: 'Supplier',            className: 'bg-zinc-700 text-zinc-300' },
+  GBX:                 { label: 'GBX',                 className: 'bg-violet-500/15 text-violet-400' },
+  CLIENT:              { label: 'Client',              className: 'bg-green-500/15 text-green-400' },
+};
 
 // ─────────────────────────────────────────────────────────────
 // Component config — 9 hardware component types

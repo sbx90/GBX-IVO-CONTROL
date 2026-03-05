@@ -8,7 +8,7 @@ import JSZip from "jszip";
 import { toast } from "sonner";
 import {
   Upload, CheckCircle2, XCircle, Download, FileText, FileSpreadsheet, FileCode2, Trash2, Copy,
-  ChevronRight, ChevronDown, AlertTriangle, PackagePlus,
+  ChevronRight, ChevronDown, AlertTriangle, PackagePlus, HelpCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1106,6 +1106,12 @@ export default function FileConverterPage() {
   const [manualSubtractPart, setManualSubtractPart] = useState<string | null>(null);
   const [manualSubtractCount, setManualSubtractCount] = useState("");
 
+  // Manual add with issue
+  const [manualIssueAddPart, setManualIssueAddPart] = useState<string | null>(null);
+  const [manualIssueSerials, setManualIssueSerials] = useState("");
+  const [manualIssueBox, setManualIssueBox] = useState("");
+  const [manualIssueId, setManualIssueId] = useState<string>("none");
+
   // Log panel
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -1160,6 +1166,32 @@ export default function FileConverterPage() {
     if (plDataRef.current) setCrossRefChecks(buildCrossRefChecks(plDataRef.current, updated));
     setManualSubtractPart(null);
     setManualSubtractCount("");
+  }
+
+  function handleManualAddWithIssue() {
+    if (!parsedItems || !manualIssueAddPart || !manualIssueBox.trim()) return;
+    const serials = manualIssueSerials.split(/[\n,\s]+/).map(s => s.trim()).filter(Boolean);
+    if (serials.length === 0) return;
+    const issueDef = issueDefinitions?.find(d => d.id === manualIssueId);
+    const totalBoxes = plDataRef.current?.summary.totalBoxes ?? 0;
+    const lotNum = plDataRef.current?.rows[0]?.lotNum ?? lotNumber.replace(/\D/g, "");
+    const boxLabel = totalBoxes > 0 ? `LOT#${lotNum} ${manualIssueBox.trim()}/${totalBoxes}` : undefined;
+    const newItems: ParsedItem[] = serials.map(sn => ({
+      part_number: manualIssueAddPart,
+      serial_number: sn,
+      lot_number: lotNumber,
+      status: "MANUAL" as ManufacturedItemStatus,
+      issue: issueDef?.name ?? null,
+      box_label: boxLabel,
+    }));
+    const updated = [...parsedItems, ...newItems];
+    setParsedItems(updated);
+    setImportSummary(buildImportSummary(updated));
+    if (plDataRef.current) setCrossRefChecks(buildCrossRefChecks(plDataRef.current, updated));
+    setManualIssueAddPart(null);
+    setManualIssueSerials("");
+    setManualIssueBox("");
+    setManualIssueId("none");
   }
 
   // Stored reference to plData for use in SN handler (needed because state update is async)
@@ -1479,6 +1511,7 @@ export default function FileConverterPage() {
       toast.success(`LOT "${lot}" created — ${parsedItems.length} items added to inventory`);
       await qc.invalidateQueries({ queryKey: ["lot_imports"] });
       await qc.invalidateQueries({ queryKey: ["manufactured_items"] });
+      await qc.invalidateQueries({ queryKey: ["manufactured_items", "lot_numbers"] });
       setTimeout(() => router.push("/lots"), 1500);
     } catch (e) {
       toast.error((e as Error).message);
@@ -1784,10 +1817,10 @@ export default function FileConverterPage() {
                         <span className={`text-xs font-semibold w-14 text-right ${row.issues > 0 ? "text-amber-400" : "text-zinc-600"}`}>
                           {row.issues > 0 ? row.issues : "—"}
                         </span>
-                        <div className="flex gap-1 items-center w-12 justify-end">
+                        <div className="flex gap-1 items-center w-16 justify-end">
                           {row.extra > 0 && (
                             <button
-                              onClick={() => { setManualSubtractPart(manualSubtractPart === row.partNumber ? null : row.partNumber); setManualSubtractCount(String(row.extra)); setManualAddPart(null); }}
+                              onClick={() => { setManualSubtractPart(manualSubtractPart === row.partNumber ? null : row.partNumber); setManualSubtractCount(String(row.extra)); setManualAddPart(null); setManualIssueAddPart(null); }}
                               className="text-zinc-500 hover:text-red-400 transition-colors text-base leading-none font-bold w-5 text-center"
                               title="Remove excess items"
                             >
@@ -1796,13 +1829,20 @@ export default function FileConverterPage() {
                           )}
                           {!row.fulfilled && (
                             <button
-                              onClick={() => { setManualAddPart(manualAddPart === row.partNumber ? null : row.partNumber); setManualSubtractPart(null); }}
+                              onClick={() => { setManualAddPart(manualAddPart === row.partNumber ? null : row.partNumber); setManualSubtractPart(null); setManualIssueAddPart(null); }}
                               className="text-zinc-500 hover:text-blue-400 transition-colors text-base leading-none font-bold w-5 text-center"
                               title="Manually add serials"
                             >
                               {manualAddPart === row.partNumber ? "×" : "+"}
                             </button>
                           )}
+                          <button
+                            onClick={() => { setManualIssueAddPart(manualIssueAddPart === row.partNumber ? null : row.partNumber); setManualAddPart(null); setManualSubtractPart(null); setManualIssueId("none"); setManualIssueSerials(""); setManualIssueBox(""); }}
+                            className="text-zinc-500 hover:text-amber-400 transition-colors w-5 flex items-center justify-center"
+                            title="Add serials with known issue"
+                          >
+                            {manualIssueAddPart === row.partNumber ? <XCircle className="h-3.5 w-3.5" /> : <HelpCircle className="h-3.5 w-3.5" />}
+                          </button>
                         </div>
                       </div>
                       {/* Manual subtract inline form */}
@@ -1862,6 +1902,50 @@ export default function FileConverterPage() {
                             </button>
                             <button
                               onClick={() => { setManualAddPart(null); setManualSerials(""); setManualBox(""); }}
+                              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {/* Add with issue inline form */}
+                      {manualIssueAddPart === row.partNumber && (
+                        <div className="mx-3 mb-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg space-y-2">
+                          <p className="text-[10px] text-amber-400 font-semibold uppercase tracking-wider">Add with Issue — {row.partNumber.split("_").pop()}</p>
+                          <Select value={manualIssueId} onValueChange={setManualIssueId}>
+                            <SelectTrigger className="h-7 text-xs bg-zinc-900 border-zinc-700 text-zinc-100 w-full">
+                              <SelectValue placeholder="Select issue…" />
+                            </SelectTrigger>
+                            <SelectContent className="bg-zinc-800 border-zinc-700">
+                              <SelectItem value="none" className="text-zinc-400 text-xs">No issue (unknown)</SelectItem>
+                              {issueDefinitions.map(def => (
+                                <SelectItem key={def.id} value={def.id} className="text-zinc-100 text-xs">{def.name}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <textarea
+                            value={manualIssueSerials}
+                            onChange={e => setManualIssueSerials(e.target.value)}
+                            placeholder={"Serial numbers (one per line or comma-separated)\ne.g.\n25050192\n25050018\n25050043"}
+                            className="w-full text-xs font-mono bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 placeholder:text-zinc-600 resize-none h-24 focus:outline-none focus:border-amber-500/50"
+                          />
+                          <div className="flex gap-2 items-center">
+                            <input
+                              value={manualIssueBox}
+                              onChange={e => setManualIssueBox(e.target.value)}
+                              placeholder="Box # (e.g. 15)"
+                              className="text-xs font-mono bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-zinc-200 placeholder:text-zinc-600 w-36 focus:outline-none focus:border-amber-500/50"
+                            />
+                            <button
+                              onClick={handleManualAddWithIssue}
+                              disabled={!manualIssueSerials.trim() || !manualIssueBox.trim()}
+                              className="text-xs font-semibold px-3 py-1.5 rounded bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            >
+                              Add with Issue
+                            </button>
+                            <button
+                              onClick={() => { setManualIssueAddPart(null); setManualIssueSerials(""); setManualIssueBox(""); setManualIssueId("none"); }}
                               className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
                             >
                               Cancel

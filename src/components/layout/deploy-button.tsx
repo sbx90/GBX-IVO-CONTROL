@@ -40,7 +40,6 @@ export function DeployButton() {
         if (data.state === "READY") {
           clearInterval(pollRef.current!);
           setState("success");
-          if (data.url) setLiveUrl(data.url);
           toast.success("Deployment complete! Live now.");
           setTimeout(() => { setState("idle"); setShowLogs(false); }, 10000);
         } else if (data.state === "ERROR" || data.state === "CANCELED") {
@@ -69,6 +68,7 @@ export function DeployButton() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Deploy failed");
       setDeploymentId(data.deploymentId);
+      if (data.url) setLiveUrl(data.url);
       toast.success("Deployment triggered!");
     } catch (err: unknown) {
       setState("error");

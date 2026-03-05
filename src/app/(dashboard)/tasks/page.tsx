@@ -20,7 +20,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import { MentionTextarea } from "@/components/ui/mention-textarea";
 import { useTasks, useCreateTask, useUpdateTask, useDeleteTask } from "@/hooks/use-tasks";
 import { TASK_STATUS_CONFIG, TASK_PRIORITY_CONFIG } from "@/lib/constants";
 import type { Task, TaskStatus, TaskPriority, CreateTaskInput } from "@/lib/types/database";
@@ -279,12 +279,12 @@ function TaskForm({
 
           <div className="space-y-1.5">
             <Label className="text-zinc-400 text-xs">Description <span className="text-zinc-600 font-normal">(optional)</span></Label>
-            <Textarea
-              placeholder="Additional details…"
+            <MentionTextarea
+              placeholder="Additional details… use @ to mention someone"
               value={description}
-              onChange={e => setDescription(e.target.value)}
+              onChange={setDescription}
               rows={3}
-              className="bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-600 resize-none"
+              className="bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-zinc-100 placeholder:text-zinc-600 text-sm"
             />
           </div>
 

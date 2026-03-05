@@ -1,5 +1,6 @@
 "use client";
 
+import React from "react";
 import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import {
@@ -60,7 +61,7 @@ export function TicketTable({ tickets, isLoading }: TicketTableProps) {
               Title
             </TableHead>
             <TableHead className="text-zinc-400 text-xs uppercase tracking-wider">
-              Kit
+              Items
             </TableHead>
             <TableHead className="text-zinc-400 text-xs uppercase tracking-wider">
               Category
@@ -81,7 +82,39 @@ export function TicketTable({ tickets, isLoading }: TicketTableProps) {
           {tickets.map((ticket) => {
             const priority = PRIORITY_CONFIG[ticket.priority];
             const status = TICKET_STATUS_CONFIG[ticket.status];
-            const kit = ticket.kits;
+            const linkedItems = ticket.ticket_manufactured_items ?? [];
+
+            // Determine what to show in Items column
+            let itemsCell: React.ReactNode;
+            if (linkedItems.length > 0) {
+              if (linkedItems.length === 1) {
+                const item = linkedItems[0].manufactured_items;
+                itemsCell = item ? (
+                  <span className="text-xs font-mono text-zinc-400">
+                    <span className="text-zinc-500">{item.part_number}</span>{" "}
+                    {item.serial_number}
+                  </span>
+                ) : <span className="text-zinc-600 text-xs">—</span>;
+              } else {
+                itemsCell = (
+                  <span className="text-xs font-medium text-blue-400 bg-blue-500/10 px-1.5 py-0.5 rounded">
+                    {linkedItems.length} items
+                  </span>
+                );
+              }
+            } else if (ticket.manufactured_items) {
+              const item = ticket.manufactured_items;
+              itemsCell = (
+                <span className="text-xs font-mono text-zinc-400">
+                  <span className="text-zinc-500">{item.part_number}</span>{" "}
+                  {item.serial_number}
+                </span>
+              );
+            } else if (ticket.kits) {
+              itemsCell = <span className="text-xs font-mono text-zinc-400">{ticket.kits.serial_number}</span>;
+            } else {
+              itemsCell = <span className="text-zinc-600 text-xs">—</span>;
+            }
 
             return (
               <TableRow
@@ -104,18 +137,7 @@ export function TicketTable({ tickets, isLoading }: TicketTableProps) {
                     {ticket.title}
                   </Link>
                 </TableCell>
-                <TableCell>
-                  {kit ? (
-                    <Link
-                      href={`/stock/${kit.id}`}
-                      className="text-xs font-mono text-zinc-400 hover:text-[#16a34a]"
-                    >
-                      {kit.serial_number}
-                    </Link>
-                  ) : (
-                    <span className="text-zinc-600 text-xs">—</span>
-                  )}
-                </TableCell>
+                <TableCell>{itemsCell}</TableCell>
                 <TableCell>
                   <span className="text-xs text-zinc-400">
                     {ISSUE_CATEGORY_CONFIG[ticket.issue_category].label}

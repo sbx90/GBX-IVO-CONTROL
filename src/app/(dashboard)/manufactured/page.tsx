@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import {
   Plus, Pencil, Trash2, Search, ChevronLeft, ChevronRight, AlertTriangle,
-  ArrowUp, ArrowDown, ArrowUpDown, Ticket as TicketIcon,
+  ArrowUp, ArrowDown, ArrowUpDown, Ticket as TicketIcon, Tags, Camera, ImagePlus, X as XIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -37,15 +37,20 @@ import {
   useUpdateManufacturedItem,
   useDeleteManufacturedItem,
   useDeleteAllManufacturedItems,
+  useBulkIssueManufacturedItems,
+  useUploadItemImage,
+  useRemoveItemImage,
 } from "@/hooks/use-manufactured";
 import { useProductCatalog } from "@/hooks/use-product-catalog";
 import { useProductDimensions } from "@/hooks/use-product-dimensions";
 import { useClients } from "@/hooks/use-clients";
+import { useIssueDefinitions } from "@/hooks/use-issue-definitions";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { useColumnOrder } from "@/hooks/use-column-order";
 import { useCreateTicket } from "@/hooks/use-tickets";
 import { ISSUE_CATEGORY_CONFIG, PRIORITY_CONFIG } from "@/lib/constants";
 import { formatDateTime } from "@/lib/utils";
+import { toast } from "sonner";
 import type { ManufacturedItem, ManufacturedItemStatus, ManufacturedItemLocation, IssueCategory, TicketPriority } from "@/lib/types/database";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -64,15 +69,20 @@ const STATUS_CONFIG: Record<ManufacturedItemStatus, { label: string; className: 
   EXTRA:      { label: "Extra Unit",  className: "bg-orange-500/15 text-orange-400 border-0" },
 };
 
-const ALL_STATUSES: ManufacturedItemStatus[] = ["IN_PROCESS", "IN_TRANSIT", "AT_CLIENT", "RETURNED", "MANUAL", "EXTRA"];
+const ALL_STATUSES: ManufacturedItemStatus[] = ["OK", "IN_PROCESS", "IN_TRANSIT", "AT_CLIENT", "RETURNED", "MANUAL", "EXTRA"];
 type FilterStatus = ManufacturedItemStatus | "ALL" | "ISSUES";
 
-const ALL_LOCATIONS: ManufacturedItemLocation[] = ["SUPPLIER", "GBX", "CLIENT"];
+const ALL_LOCATIONS: ManufacturedItemLocation[] = ["FACTORY", "TRANSIT", "GBX_WAREHOUSE_CHINA", "FREIGHT_FORWARDER", "CLIENT_WAREHOUSE", "SUPPLIER", "GBX", "CLIENT"];
 
 const LOCATION_CONFIG: Record<ManufacturedItemLocation, { label: string; className: string }> = {
-  SUPPLIER: { label: "Supplier", className: "bg-zinc-700 text-zinc-400 border-0" },
-  GBX:      { label: "GBX",      className: "bg-green-500/15 text-green-400 border-0" },
-  CLIENT:   { label: "Client",   className: "bg-blue-500/15 text-blue-400 border-0" },
+  FACTORY:             { label: "Factory",           className: "bg-amber-500/15 text-amber-400 border-0" },
+  TRANSIT:             { label: "Transit",           className: "bg-sky-500/15 text-sky-400 border-0" },
+  GBX_WAREHOUSE_CHINA: { label: "GBX WH China",      className: "bg-violet-500/15 text-violet-400 border-0" },
+  FREIGHT_FORWARDER:   { label: "Freight-Forwarder", className: "bg-cyan-500/15 text-cyan-400 border-0" },
+  CLIENT_WAREHOUSE:    { label: "Client Warehouse",  className: "bg-green-500/15 text-green-400 border-0" },
+  SUPPLIER:            { label: "Supplier",          className: "bg-zinc-700 text-zinc-400 border-0" },
+  GBX:                 { label: "GBX",               className: "bg-violet-500/15 text-violet-400 border-0" },
+  CLIENT:              { label: "Client",            className: "bg-green-500/15 text-green-400 border-0" },
 };
 
 const COLUMNS: { key: string; label: string; sortCol: string | null }[] = [
@@ -81,6 +91,8 @@ const COLUMNS: { key: string; label: string; sortCol: string | null }[] = [
   { key: "LOT #",         label: "LOT #",         sortCol: "lot_number" },
   { key: "Box",           label: "Box",           sortCol: "box_label" },
   { key: "Issue",         label: "Issue",         sortCol: "issue" },
+  { key: "Image",         label: "Image",         sortCol: null },
+  { key: "Comment",       label: "Comment",       sortCol: null },
   { key: "Ticket",        label: "Ticket",        sortCol: null },
   { key: "Location",      label: "Location",      sortCol: "location" },
   { key: "Client",        label: "Client",        sortCol: null },
@@ -97,6 +109,9 @@ interface ItemFormState {
   client_id: string;
   location: ManufacturedItemLocation;
   box_label: string;
+  issue: string | null;
+  comment: string | null;
+  image_url: string | null;
 }
 
 const EMPTY_FORM: ItemFormState = {
@@ -107,6 +122,9 @@ const EMPTY_FORM: ItemFormState = {
   client_id: "none",
   location: "GBX",
   box_label: "",
+  issue: null,
+  comment: null,
+  image_url: null,
 };
 
 function fmt(n: number) { return n.toLocaleString(); }
@@ -183,6 +201,7 @@ export default function ManufacturedPage() {
   }
   const { data: clients = [] } = useClients();
   const { data: dimensions = [] } = useProductDimensions();
+  const { data: issueDefinitions = [] } = useIssueDefinitions();
 
   const { order, dragging, dragOver, onDragStart, onDragOver, onDrop, onDragEnd, onDragLeave } =
     useColumnOrder("col-order:manufactured", DEFAULT_COL_ORDER);
@@ -194,6 +213,8 @@ export default function ManufacturedPage() {
     "LOT #": 90,
     "Box": 80,
     "Issue": 100,
+    "Image": 60,
+    "Comment": 180,
     "Ticket": 80,
     "Location": 90,
     "Client": 100,
@@ -213,6 +234,58 @@ export default function ManufacturedPage() {
   const deleteItem = useDeleteManufacturedItem();
   const deleteAll = useDeleteAllManufacturedItems();
   const createTicket = useCreateTicket();
+  const bulkIssue = useBulkIssueManufacturedItems();
+  const uploadItemImage = useUploadItemImage();
+  const removeItemImage = useRemoveItemImage();
+
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [pendingImageFile, setPendingImageFile] = useState<File | null>(null);
+  const [pendingImagePreview, setPendingImagePreview] = useState<string | null>(null);
+
+  // Bulk Issue dialog state
+  const [bulkIssueOpen, setBulkIssueOpen] = useState(false);
+  const [bulkIssueId, setBulkIssueId] = useState<string>("none");
+  const [bulkIssuePart, setBulkIssuePart] = useState<string>("none");
+  const [bulkIssueLot, setBulkIssueLot] = useState<string>("none");
+  const [bulkIssueText, setBulkIssueText] = useState("");
+  const [bulkIssueResult, setBulkIssueResult] = useState<{ matched: number; notFound: string[]; alreadySet: string[] } | null>(null);
+  const [bulkIssueDupes, setBulkIssueDupes] = useState<string[]>([]);
+
+  function parseBulkSerials(text: string): { unique: string[]; dupes: string[] } {
+    const all = text.split(/[\n,\s]+/).map(s => s.trim()).filter(Boolean);
+    const seen = new Set<string>();
+    const dupes = new Set<string>();
+    for (const sn of all) { if (seen.has(sn)) dupes.add(sn); else seen.add(sn); }
+    return { unique: [...seen], dupes: [...dupes] };
+  }
+
+  async function handleBulkIssueSubmit() {
+    if (bulkIssuePart === "none") return;
+    const { unique, dupes } = parseBulkSerials(bulkIssueText);
+    if (unique.length === 0) return;
+    setBulkIssueDupes(dupes);
+    const issueName = bulkIssueId === "none" ? null : (issueDefinitions.find(d => d.id === bulkIssueId)?.name ?? null);
+    const result = await bulkIssue.mutateAsync({
+      serials: unique,
+      issue: issueName,
+      partNumber: bulkIssuePart,
+      lotNumber: bulkIssueLot !== "none" ? bulkIssueLot : undefined,
+    });
+    setBulkIssueResult(result);
+    if (result.matched > 0) toast.success(`${result.matched} item${result.matched !== 1 ? "s" : ""} updated`);
+    if (result.notFound.length > 0) toast.warning(`${result.notFound.length} serial${result.notFound.length !== 1 ? "s" : ""} not found`);
+    if (result.alreadySet.length > 0) toast.info(`${result.alreadySet.length} already had this issue`);
+  }
+
+  function openBulkIssue() {
+    setBulkIssueOpen(true);
+    setBulkIssueId("none");
+    setBulkIssuePart("none");
+    setBulkIssueLot("none");
+    setBulkIssueText("");
+    setBulkIssueResult(null);
+    setBulkIssueDupes([]);
+  }
 
   // Ticket dialog state
   const [ticketItem, setTicketItem] = useState<ManufacturedItem | null>(null);
@@ -233,7 +306,7 @@ export default function ManufacturedPage() {
     e.preventDefault();
     if (!ticketItem) return;
     await createTicket.mutateAsync({
-      manufactured_item_id: ticketItem.id,
+      manufactured_item_ids: [ticketItem.id],
       client_id: ticketItem.client_id ?? undefined,
       title: ticketTitle.trim(),
       issue_category: ticketCategory,
@@ -247,10 +320,12 @@ export default function ManufacturedPage() {
   const [editing, setEditing] = useState<ManufacturedItem | null>(null);
   const [form, setForm] = useState<ItemFormState>(EMPTY_FORM);
 
-  function openAdd() { setEditing(null); setForm(EMPTY_FORM); setDialogOpen(true); }
+  function openAdd() { setEditing(null); setForm(EMPTY_FORM); setPendingImageFile(null); setPendingImagePreview(null); setDialogOpen(true); }
   function openEdit(item: ManufacturedItem) {
     setEditing(item);
-    setForm({ part_number: item.part_number, serial_number: item.serial_number, lot_number: item.lot_number ?? "", status: item.status, client_id: item.client_id ?? "none", location: item.location ?? "GBX", box_label: item.box_label ?? "" });
+    setForm({ part_number: item.part_number, serial_number: item.serial_number, lot_number: item.lot_number ?? "", status: item.status, client_id: item.client_id ?? "none", location: item.location ?? "GBX", box_label: item.box_label ?? "", issue: item.issue ?? null, comment: item.comment ?? null, image_url: item.image_url ?? null });
+    setPendingImageFile(null);
+    setPendingImagePreview(null);
     setDialogOpen(true);
   }
   async function handleSubmit(e: React.FormEvent) {
@@ -263,9 +338,19 @@ export default function ManufacturedPage() {
       client_id: form.client_id !== "none" ? form.client_id : undefined,
       location: form.location,
       box_label: form.box_label.trim() || null,
+      issue: form.issue || null,
+      comment: form.comment?.trim() || null,
     };
-    if (editing) await updateItem.mutateAsync({ id: editing.id, updates: payload });
-    else await createItem.mutateAsync(payload);
+    let savedId = editing?.id;
+    if (editing) {
+      await updateItem.mutateAsync({ id: editing.id, updates: payload });
+    } else {
+      const created = await createItem.mutateAsync(payload);
+      savedId = created?.id;
+    }
+    if (pendingImageFile && savedId) {
+      await uploadItemImage.mutateAsync({ itemId: savedId, file: pendingImageFile });
+    }
     setDialogOpen(false);
   }
   function handleDelete(item: ManufacturedItem) {
@@ -295,6 +380,10 @@ export default function ManufacturedPage() {
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <Button variant="ghost" size="sm" className="text-amber-400 hover:text-amber-300 hover:bg-amber-400/10 gap-1.5" onClick={openBulkIssue}>
+            <Tags className="h-3.5 w-3.5" />
+            Bulk Issue
+          </Button>
           {total > 0 && (
             <Button variant="ghost" size="sm" className="text-red-500 hover:text-red-400 hover:bg-red-400/10 gap-1.5" disabled={deleteAll.isPending} onClick={handleDeleteAll}>
               <AlertTriangle className="h-3.5 w-3.5" />
@@ -500,6 +589,19 @@ export default function ManufacturedPage() {
                       return <TableCell key={key} className="text-zinc-400 text-xs font-mono">{item.box_label ? item.box_label.replace(/^LOT#\d+\s*/i, "") : <span className="text-zinc-600">—</span>}</TableCell>;
                     case "Issue":
                       return <TableCell key={key} className="text-xs">{item.issue ? <span className="text-red-400 font-medium">{item.issue}</span> : <span className="text-green-400">OK</span>}</TableCell>;
+                    case "Image":
+                      return (
+                        <TableCell key={key}>
+                          {item.image_url
+                            ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={item.image_url} alt="" className="h-8 w-8 rounded object-cover cursor-pointer hover:opacity-80 transition-opacity" onClick={() => setLightboxUrl(item.image_url!)} />
+                            )
+                            : <Camera className="h-4 w-4 text-zinc-700" />}
+                        </TableCell>
+                      );
+                    case "Comment":
+                      return <TableCell key={key} className="text-zinc-400 text-xs max-w-[180px] truncate" title={item.comment ?? undefined}>{item.comment ?? <span className="text-zinc-600">—</span>}</TableCell>;
                     case "Ticket": {
                       const count = item.tickets?.[0]?.count ?? 0;
                       return (
@@ -567,6 +669,107 @@ export default function ManufacturedPage() {
         </div>
       )}
 
+      {/* Bulk Issue Dialog */}
+      <Dialog open={bulkIssueOpen} onOpenChange={(o) => { if (!o) { setBulkIssueOpen(false); setBulkIssueResult(null); setBulkIssueDupes([]); } }}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg">
+              <Tags className="h-4 w-4 text-amber-400" />
+              Bulk Issue
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-1">
+            {/* Part Number (required) + LOT (optional) */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-zinc-400 text-xs uppercase tracking-wider">Part Number <span className="text-red-400">*</span></Label>
+                <Select value={bulkIssuePart} onValueChange={(v) => { setBulkIssuePart(v); setBulkIssueResult(null); setBulkIssueDupes([]); }}>
+                  <SelectTrigger className={`bg-zinc-800 border-zinc-700 text-zinc-100 text-sm font-mono ${bulkIssuePart === "none" ? "text-zinc-500" : ""}`}><SelectValue placeholder="Select part…" /></SelectTrigger>
+                  <SelectContent className="bg-zinc-800 border-zinc-700">
+                    <SelectItem value="none" className="text-zinc-500">Select part number…</SelectItem>
+                    {allPartNumbers.map((pn) => <SelectItem key={pn} value={pn} className="text-zinc-100 font-mono text-xs">{pn}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-zinc-400 text-xs uppercase tracking-wider">LOT <span className="text-zinc-600">(optional)</span></Label>
+                <Select value={bulkIssueLot} onValueChange={(v) => { setBulkIssueLot(v); setBulkIssueResult(null); setBulkIssueDupes([]); }}>
+                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100 text-sm font-mono"><SelectValue /></SelectTrigger>
+                  <SelectContent className="bg-zinc-800 border-zinc-700">
+                    <SelectItem value="none" className="text-zinc-400">All LOTs</SelectItem>
+                    {allLotNumbers.map((ln) => <SelectItem key={ln} value={ln} className="text-zinc-100 font-mono">{ln}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-zinc-400 text-xs uppercase tracking-wider">Issue Type</Label>
+              <Select value={bulkIssueId} onValueChange={setBulkIssueId}>
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100"><SelectValue /></SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700">
+                  <SelectItem value="none" className="text-zinc-400">Clear Issue (set to no issue)</SelectItem>
+                  {issueDefinitions.map((def) => (
+                    <SelectItem key={def.id} value={def.id} className="text-zinc-100">{def.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-zinc-400 text-xs uppercase tracking-wider">Serial Numbers</Label>
+              <textarea
+                value={bulkIssueText}
+                onChange={(e) => { setBulkIssueText(e.target.value); setBulkIssueResult(null); setBulkIssueDupes([]); }}
+                placeholder="Paste serial numbers — one per line or comma-separated…"
+                className="w-full text-xs font-mono bg-zinc-800 border border-zinc-700 rounded px-2.5 py-2 text-zinc-200 placeholder:text-zinc-600 resize-none h-32 focus:outline-none focus:border-zinc-500"
+              />
+              {bulkIssueText.trim() && (
+                <p className="text-xs text-zinc-500">
+                  {bulkIssueText.split(/[\n,\s]+/).filter(Boolean).length} serial{bulkIssueText.split(/[\n,\s]+/).filter(Boolean).length !== 1 ? "s" : ""}
+                </p>
+              )}
+            </div>
+            {(bulkIssueResult || bulkIssueDupes.length > 0) && (
+              <div className="rounded-md bg-zinc-800/60 border border-zinc-700 px-3 py-2.5 space-y-1.5">
+                {bulkIssueDupes.length > 0 && (
+                  <p className="text-xs text-amber-400 font-medium">
+                    ⚠ Duplicate serials in input (deduplicated): {bulkIssueDupes.slice(0, 6).join(", ")}
+                    {bulkIssueDupes.length > 6 ? ` +${bulkIssueDupes.length - 6} more` : ""}
+                  </p>
+                )}
+                {bulkIssueResult && (<>
+                  {bulkIssueResult.matched > 0 && (
+                    <p className="text-xs text-green-400 font-medium">✓ {bulkIssueResult.matched} item{bulkIssueResult.matched !== 1 ? "s" : ""} updated</p>
+                  )}
+                  {bulkIssueResult.alreadySet.length > 0 && (
+                    <p className="text-xs text-zinc-400">
+                      Already set ({bulkIssueResult.alreadySet.length}): {bulkIssueResult.alreadySet.slice(0, 6).join(", ")}
+                      {bulkIssueResult.alreadySet.length > 6 ? ` +${bulkIssueResult.alreadySet.length - 6} more` : ""}
+                    </p>
+                  )}
+                  {bulkIssueResult.notFound.length > 0 && (
+                    <p className="text-xs text-red-400">
+                      Not found ({bulkIssueResult.notFound.length}): {bulkIssueResult.notFound.slice(0, 6).join(", ")}
+                      {bulkIssueResult.notFound.length > 6 ? ` +${bulkIssueResult.notFound.length - 6} more` : ""}
+                    </p>
+                  )}
+                </>)}
+              </div>
+            )}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setBulkIssueOpen(false)} className="text-zinc-400">Close</Button>
+              <Button
+                onClick={handleBulkIssueSubmit}
+                disabled={bulkIssue.isPending || !bulkIssueText.trim() || bulkIssuePart === "none"}
+                size="sm"
+                className="bg-amber-600 hover:bg-amber-500 text-white disabled:opacity-40"
+              >
+                {bulkIssue.isPending ? "Applying…" : `Apply to ${bulkIssueText.split(/[\n,\s]+/).filter(Boolean).length || 0} serials`}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Create Ticket Dialog */}
       <Dialog open={!!ticketItem} onOpenChange={(o) => { if (!o) setTicketItem(null); }}>
         <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-md">
@@ -633,15 +836,26 @@ export default function ManufacturedPage() {
         </DialogContent>
       </Dialog>
 
+      {/* Lightbox */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center cursor-pointer"
+          onClick={() => setLightboxUrl(null)}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src={lightboxUrl} alt="" className="max-w-[90vw] max-h-[90vh] object-contain rounded-lg" />
+        </div>
+      )}
+
       {/* Add/Edit Dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100 sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="text-lg">{editing ? "Edit Item" : "Add Manufactured Item"}</DialogTitle>
           </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-5 mt-1">
+          <form onSubmit={handleSubmit} className="space-y-4 mt-1">
 
-            {/* Identity */}
+            {/* Row 1 — Identity */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-zinc-400 text-xs uppercase tracking-wider">Part Number</Label>
@@ -653,14 +867,8 @@ export default function ManufacturedPage() {
               </div>
             </div>
 
-            {/* Box label */}
-            <div className="space-y-1.5">
-              <Label className="text-zinc-400 text-xs uppercase tracking-wider">Box</Label>
-              <Input placeholder="e.g. LOT#1 12/52" value={form.box_label ?? ""} onChange={(e) => setForm((f) => ({ ...f, box_label: e.target.value }))} className="bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 font-mono text-sm" />
-            </div>
-
-            {/* Logistics + Client */}
-            <div className="grid grid-cols-4 gap-3">
+            {/* Row 2 — LOT + Box */}
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-zinc-400 text-xs uppercase tracking-wider">LOT #</Label>
                 <Select value={form.lot_number || "none"} onValueChange={(v) => setForm((f) => ({ ...f, lot_number: v === "none" ? "" : v }))}>
@@ -671,6 +879,14 @@ export default function ManufacturedPage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-1.5">
+                <Label className="text-zinc-400 text-xs uppercase tracking-wider">Box Label</Label>
+                <Input placeholder="e.g. LOT#1 12/52" value={form.box_label ?? ""} onChange={(e) => setForm((f) => ({ ...f, box_label: e.target.value }))} className="bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 font-mono text-sm" />
+              </div>
+            </div>
+
+            {/* Row 3 — Status + Location + Client */}
+            <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5">
                 <Label className="text-zinc-400 text-xs uppercase tracking-wider">Status</Label>
                 <Select value={form.status} onValueChange={(v) => setForm((f) => ({ ...f, status: v as ManufacturedItemStatus }))}>
@@ -689,17 +905,98 @@ export default function ManufacturedPage() {
                   </SelectContent>
                 </Select>
               </div>
-              {clients.length > 0 && (
-                <div className="space-y-1.5">
-                  <Label className="text-zinc-400 text-xs uppercase tracking-wider">Client</Label>
-                  <Select value={form.client_id} onValueChange={(v) => setForm((f) => ({ ...f, client_id: v }))}>
-                    <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100 text-sm"><SelectValue placeholder="Client…" /></SelectTrigger>
-                    <SelectContent className="bg-zinc-800 border-zinc-700">
-                      <SelectItem value="none" className="text-zinc-400">No client</SelectItem>
-                      {clients.map((c) => <SelectItem key={c.id} value={c.id} className="text-zinc-100">{c.name}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+              <div className="space-y-1.5">
+                <Label className="text-zinc-400 text-xs uppercase tracking-wider">Client</Label>
+                <Select value={form.client_id} onValueChange={(v) => setForm((f) => ({ ...f, client_id: v }))}>
+                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100 text-sm"><SelectValue placeholder="Client…" /></SelectTrigger>
+                  <SelectContent className="bg-zinc-800 border-zinc-700">
+                    <SelectItem value="none" className="text-zinc-400">No client</SelectItem>
+                    {clients.map((c) => <SelectItem key={c.id} value={c.id} className="text-zinc-100">{c.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Row 4 — Issue + Comment */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-zinc-400 text-xs uppercase tracking-wider">Issue</Label>
+                <Select value={form.issue ?? "none"} onValueChange={(v) => setForm((f) => ({ ...f, issue: v === "none" ? null : v }))}>
+                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100 text-sm"><SelectValue placeholder="No issue" /></SelectTrigger>
+                  <SelectContent className="bg-zinc-800 border-zinc-700">
+                    <SelectItem value="none" className="text-zinc-400">No issue</SelectItem>
+                    {issueDefinitions.map((def) => (
+                      <SelectItem key={def.id} value={def.name} className="text-zinc-100">{def.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-zinc-400 text-xs uppercase tracking-wider">Comment</Label>
+                <Input
+                  placeholder="Optional note…"
+                  value={form.comment ?? ""}
+                  onChange={(e) => setForm((f) => ({ ...f, comment: e.target.value || null }))}
+                  className="bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 text-sm"
+                />
+              </div>
+            </div>
+
+            {/* Row 5 — Image */}
+            <div className="space-y-1.5">
+              <Label className="text-zinc-400 text-xs uppercase tracking-wider">Photo <span className="text-zinc-600 normal-case">(optional)</span></Label>
+              {pendingImagePreview ? (
+                <div className="flex items-center gap-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={pendingImagePreview} alt="" className="h-16 w-16 rounded object-cover border border-zinc-700" />
+                  <div className="flex flex-col gap-1.5">
+                    <button type="button" onClick={() => { setPendingImageFile(null); setPendingImagePreview(null); }} className="text-xs text-red-400 hover:text-red-300 transition-colors flex items-center gap-1"><XIcon className="h-3 w-3" />Remove</button>
+                    <label className="text-xs text-zinc-400 hover:text-zinc-300 transition-colors flex items-center gap-1 cursor-pointer">
+                      <ImagePlus className="h-3 w-3" />Replace
+                      <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        if (pendingImagePreview) URL.revokeObjectURL(pendingImagePreview);
+                        setPendingImageFile(f);
+                        setPendingImagePreview(URL.createObjectURL(f));
+                      }} />
+                    </label>
+                  </div>
                 </div>
+              ) : form.image_url ? (
+                <div className="flex items-center gap-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={form.image_url} alt="" className="h-16 w-16 rounded object-cover border border-zinc-700 cursor-pointer" onClick={() => setLightboxUrl(form.image_url)} />
+                  <div className="flex flex-col gap-1.5">
+                    <button type="button" onClick={async () => {
+                      if (!editing) return;
+                      await removeItemImage.mutateAsync({ itemId: editing.id, imageUrl: form.image_url! });
+                      setForm(f => ({ ...f, image_url: null }));
+                    }} className="text-xs text-red-400 hover:text-red-300 transition-colors flex items-center gap-1" disabled={removeItemImage.isPending}>
+                      <XIcon className="h-3 w-3" />{removeItemImage.isPending ? "Removing…" : "Remove image"}
+                    </button>
+                    <label className="text-xs text-zinc-400 hover:text-zinc-300 transition-colors flex items-center gap-1 cursor-pointer">
+                      <ImagePlus className="h-3 w-3" />Replace
+                      <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (!f) return;
+                        setPendingImageFile(f);
+                        setPendingImagePreview(URL.createObjectURL(f));
+                      }} />
+                    </label>
+                  </div>
+                </div>
+              ) : (
+                <label className="flex flex-col items-center justify-center w-full h-20 rounded-lg border-2 border-dashed border-zinc-700 hover:border-zinc-500 cursor-pointer transition-colors text-zinc-600 hover:text-zinc-400">
+                  <Camera className="h-5 w-5 mb-1" />
+                  <span className="text-xs">Click to add photo</span>
+                  <input type="file" accept="image/*" className="hidden" onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (!f) return;
+                    setPendingImageFile(f);
+                    setPendingImagePreview(URL.createObjectURL(f));
+                  }} />
+                </label>
               )}
             </div>
 

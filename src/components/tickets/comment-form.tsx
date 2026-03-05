@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Loader2, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { MentionTextarea } from "@/components/ui/mention-textarea";
 import { AttachmentUpload } from "./attachment-upload";
 import { useAddComment } from "@/hooks/use-tickets";
 import { toast } from "sonner";
@@ -29,11 +29,11 @@ export function CommentForm({ ticketId }: CommentFormProps) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
-      <Textarea
+      <MentionTextarea
         value={content}
-        onChange={(e) => setContent(e.target.value)}
-        placeholder="Add a comment..."
-        className="bg-zinc-800 border-zinc-700 text-zinc-100 placeholder:text-zinc-500 resize-none"
+        onChange={setContent}
+        placeholder="Add a comment… use @ to mention someone"
+        className="bg-zinc-800 border border-zinc-700 rounded-md px-3 py-2 text-zinc-100 placeholder:text-zinc-500 text-sm w-full"
         rows={3}
       />
       <AttachmentUpload

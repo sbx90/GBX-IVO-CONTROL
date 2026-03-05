@@ -6,6 +6,7 @@ import type {
   TicketAttachment,
   TicketFilters,
   CreateTicketInput,
+  ManufacturedItem,
 } from "@/lib/types/database";
 import { toast } from "sonner";
 
@@ -15,6 +16,24 @@ function getSupabase() {
 
 // ─── Queries ───────────────────────────────────────────────────
 
+export function useSearchManufacturedItems(query: string) {
+  return useQuery({
+    queryKey: ["manufactured_items", "search", query],
+    enabled: query.length >= 2,
+    queryFn: async () => {
+      const supabase = getSupabase();
+      const { data, error } = await supabase
+        .from("manufactured_items")
+        .select("id, part_number, serial_number, lot_number, client_id")
+        .or(`serial_number.ilike.%${query}%,part_number.ilike.%${query}%`)
+        .limit(20);
+      if (error) throw error;
+      return data as Pick<ManufacturedItem, "id" | "part_number" | "serial_number" | "lot_number" | "client_id">[];
+    },
+    staleTime: 10_000,
+  });
+}
+
 export function useTickets(filters?: TicketFilters) {
   return useQuery({
     queryKey: ["tickets", filters],
@@ -22,7 +41,7 @@ export function useTickets(filters?: TicketFilters) {
       const supabase = getSupabase();
       let query = supabase
         .from("tickets")
-        .select("*, kits(id, serial_number, status)")
+        .select("*, kits(id, serial_number, status), manufactured_items(id, part_number, serial_number), ticket_manufactured_items(id, manufactured_item_id, manufactured_items(id, part_number, serial_number))")
         .order("created_at", { ascending: false });
 
       if (filters?.status && filters.status !== "ALL") {
@@ -53,7 +72,7 @@ export function useTicket(id: string) {
       const { data, error } = await supabase
         .from("tickets")
         .select(
-          "*, kits(*), kit_components(id, component_type), mainboard_sections(id, section_name), ticket_comments(*, ticket_attachments(*)), ticket_attachments(*)"
+          "*, kits(*), kit_components(id, component_type), mainboard_sections(id, section_name), manufactured_items(id, part_number, serial_number), ticket_manufactured_items(id, manufactured_item_id, manufactured_items(id, part_number, serial_number)), ticket_comments(*, ticket_attachments(*)), ticket_attachments(*)"
         )
         .eq("id", id)
         .single();
@@ -102,13 +121,24 @@ export function useCreateTicket() {
         }
       }
 
+      // Link manufactured items via join table
+      if (input.manufactured_item_ids && input.manufactured_item_ids.length > 0) {
+        await supabase.from("ticket_manufactured_items").insert(
+          input.manufactured_item_ids.map((mid) => ({
+            ticket_id: ticket.id,
+            manufactured_item_id: mid,
+          }))
+        );
+      }
+
       return ticket as Ticket;
     },
     onSuccess: (ticket) => {
       queryClient.invalidateQueries({ queryKey: ["tickets"] });
       queryClient.invalidateQueries({ queryKey: ["kits"] });
       if (ticket.kit_id) queryClient.invalidateQueries({ queryKey: ["kit", ticket.kit_id] });
-      queryClient.invalidateQueries({ queryKey: ["manufactured_items"] });
+      queryClient.invalidateQueries({ queryKey: ["manufactured_items", "paginated"] });
+      queryClient.invalidateQueries({ queryKey: ["gbx_warehouse_stock"] });
       toast.success("Ticket created");
     },
     onError: (error: Error) => {

@@ -45,6 +45,31 @@ export interface TeamMember {
   created_at: string;
 }
 
+export interface TeamMemberBasic {
+  id: string;
+  full_name: string | null;
+  role: string | null;
+}
+
+export async function listTeamMembersBasic(): Promise<TeamMemberBasic[]> {
+  // Requires auth (not admin) — any logged-in user can see team members for @mentions
+  const cookieStore = await cookies();
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    { cookies: { getAll() { return cookieStore.getAll(); }, setAll() {} } }
+  );
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return [];
+
+  const admin = getAdminClient();
+  const { data } = await admin
+    .from('profiles')
+    .select('id, full_name, role')
+    .order('full_name', { ascending: true });
+  return (data ?? []) as TeamMemberBasic[];
+}
+
 export async function listTeamMembers(): Promise<TeamMember[]> {
   await requireAdmin();
   const admin = getAdminClient();
@@ -94,6 +119,17 @@ export async function createTeamMember(
     await admin.auth.admin.deleteUser(user.id);
     throw profileError;
   }
+}
+
+export async function updateTeamMemberName(userId: string, fullName: string): Promise<void> {
+  await requireAdmin();
+  const admin = getAdminClient();
+
+  const { error } = await admin
+    .from('profiles')
+    .upsert({ id: userId, full_name: fullName.trim() || null }, { onConflict: 'id' });
+
+  if (error) throw error;
 }
 
 export async function updateTeamMemberRole(userId: string, role: UserRole): Promise<void> {

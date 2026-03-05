@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useEffect } from "react";
 import Link from "next/link";
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, ArrowUpDown, ArrowUp, ArrowDown, AlertTriangle } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -18,7 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PRODUCTION_STATUS_CONFIG } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useOrderFulfillmentDetail, type LotRange } from "@/hooks/use-production";
+import { useOrderFulfillmentDetail, useOrderIssueCount, type LotRange } from "@/hooks/use-production";
 import { useKitDefinitions } from "@/hooks/use-kit-definitions";
 import type { ProductionOrder, KitDefinition } from "@/lib/types/database";
 
@@ -69,16 +69,14 @@ function ItemsCountCell({ order }: { order: ProductionOrder }) {
   const complete = fulfilledCount >= totalExpected;
 
   return (
-    <div className="flex flex-col gap-0.5">
-      <span className={`text-sm font-semibold tabular-nums ${complete ? "text-[#16a34a]" : "text-zinc-200"}`}>
-        {fulfilledCount.toLocaleString()} / {totalExpected.toLocaleString()}
-      </span>
-      {complete && <span className="text-[10px] text-[#16a34a] font-medium uppercase tracking-wider">complete</span>}
-    </div>
+    <span className={`text-sm font-semibold tabular-nums whitespace-nowrap ${complete ? "text-[#16a34a]" : "text-zinc-200"}`}>
+      {fulfilledCount.toLocaleString()} / {totalExpected.toLocaleString()}
+      {complete && <span className="text-[10px] font-medium uppercase tracking-wider ml-1.5">complete</span>}
+    </span>
   );
 }
 
-function FulfilledCell({ order }: { order: ProductionOrder }) {
+function FulfilledCell({ order, onPctChange }: { order: ProductionOrder; onPctChange?: (id: string, pct: number) => void }) {
   const [open, setOpen] = useState(false);
   // Always load detail so the progress bar uses actual DB counts (not lot_imports.item_count
   // which double-counts when S/Ns overlap across LOTs)
@@ -95,6 +93,10 @@ function FulfilledCell({ order }: { order: ProductionOrder }) {
   const fulfillmentPct = totalExpected ? Math.min(100, parseFloat(((fulfilledCount / totalExpected) * 100).toFixed(2))) : 0;
   const isFull = fulfillmentPct >= 100;
   const isLoading = detailLoading;
+
+  useEffect(() => {
+    if (!isLoading && totalExpected) onPctChange?.(order.id, fulfillmentPct);
+  }, [order.id, fulfillmentPct, isLoading, totalExpected, onPctChange]);
 
   if (!snDetail && (kitDefsLoading || totalExpected === null)) return <span className="text-zinc-600 text-xs animate-pulse">…</span>;
   if (totalExpected === 0) return <span className="text-zinc-600 text-xs">—</span>;
@@ -185,7 +187,76 @@ function FulfilledCell({ order }: { order: ProductionOrder }) {
   );
 }
 
+function IssueCountCell({ orderId, onCountChange }: { orderId: string; onCountChange?: (id: string, n: number) => void }) {
+  const { data: count, isLoading } = useOrderIssueCount(orderId);
+
+  useEffect(() => {
+    if (!isLoading && count !== undefined) onCountChange?.(orderId, count);
+  }, [orderId, count, isLoading, onCountChange]);
+
+  if (isLoading) return <span className="text-zinc-600 text-xs animate-pulse">…</span>;
+  if (!count) return <span className="text-zinc-600 text-xs">—</span>;
+  return (
+    <span className="flex items-center gap-1 text-sm font-semibold text-red-400">
+      <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+      {count.toLocaleString()}
+    </span>
+  );
+}
+
+type SortKey = "order_number" | "status" | "progress" | "fulfillment" | "unresolved" | "target_date";
+type SortDir = "asc" | "desc";
+
+function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; sortDir: SortDir }) {
+  if (col !== sortKey) return <ArrowUpDown className="h-3 w-3 text-zinc-600" />;
+  return sortDir === "asc"
+    ? <ArrowUp className="h-3 w-3 text-zinc-300" />
+    : <ArrowDown className="h-3 w-3 text-zinc-300" />;
+}
+
 export function OrderTable({ orders, isLoading }: OrderTableProps) {
+  const [sortKey, setSortKey] = useState<SortKey>("order_number");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [fulfillmentPcts, setFulfillmentPcts] = useState<Record<string, number>>({});
+  const [issueCounts, setIssueCounts] = useState<Record<string, number>>({});
+
+  const handleFulfillmentPct = useCallback((id: string, pct: number) => {
+    setFulfillmentPcts((prev) => (prev[id] === pct ? prev : { ...prev, [id]: pct }));
+  }, []);
+
+  const handleIssueCount = useCallback((id: string, n: number) => {
+    setIssueCounts((prev) => (prev[id] === n ? prev : { ...prev, [id]: n }));
+  }, []);
+
+  function toggleSort(col: SortKey) {
+    if (sortKey === col) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(col);
+      setSortDir("asc");
+    }
+  }
+
+  const sorted = [...orders].sort((a, b) => {
+    let cmp = 0;
+    if (sortKey === "order_number") {
+      cmp = a.order_number.localeCompare(b.order_number);
+    } else if (sortKey === "status") {
+      cmp = a.status.localeCompare(b.status);
+    } else if (sortKey === "progress") {
+      cmp = getProgress(a) - getProgress(b);
+    } else if (sortKey === "fulfillment") {
+      cmp = (fulfillmentPcts[a.id] ?? -1) - (fulfillmentPcts[b.id] ?? -1);
+    } else if (sortKey === "unresolved") {
+      cmp = (issueCounts[a.id] ?? -1) - (issueCounts[b.id] ?? -1);
+    } else if (sortKey === "target_date") {
+      const da = a.target_date ? new Date(a.target_date).getTime() : Infinity;
+      const db = b.target_date ? new Date(b.target_date).getTime() : Infinity;
+      cmp = da - db;
+    }
+    return sortDir === "asc" ? cmp : -cmp;
+  });
+
   if (isLoading) {
     return (
       <div className="space-y-2">
@@ -216,28 +287,49 @@ export function OrderTable({ orders, isLoading }: OrderTableProps) {
               #
             </TableHead>
             <TableHead className="text-zinc-400 text-xs uppercase tracking-wider">
-              Order #
+              <button onClick={() => toggleSort("order_number")} className="flex items-center gap-1 hover:text-zinc-200 transition-colors">
+                Order # <SortIcon col="order_number" sortKey={sortKey} sortDir={sortDir} />
+              </button>
             </TableHead>
             <TableHead className="text-zinc-400 text-xs uppercase tracking-wider">
-              Status
+              <button onClick={() => toggleSort("status")} className="flex items-center gap-1 hover:text-zinc-200 transition-colors">
+                Status <SortIcon col="status" sortKey={sortKey} sortDir={sortDir} />
+              </button>
+            </TableHead>
+            <TableHead className="text-zinc-400 text-xs uppercase tracking-wider">
+              Client
             </TableHead>
             <TableHead className="text-zinc-400 text-xs uppercase tracking-wider min-w-32">
-              Progress
+              <button onClick={() => toggleSort("progress")} className="flex items-center gap-1 hover:text-zinc-200 transition-colors">
+                Progress <SortIcon col="progress" sortKey={sortKey} sortDir={sortDir} />
+              </button>
             </TableHead>
             <TableHead className="text-zinc-400 text-xs uppercase tracking-wider min-w-40">
-              Order Fulfilled
+              <button onClick={() => toggleSort("fulfillment")} className="flex items-center gap-1 hover:text-zinc-200 transition-colors">
+                Order Fulfilled <SortIcon col="fulfillment" sortKey={sortKey} sortDir={sortDir} />
+              </button>
             </TableHead>
             <TableHead className="text-zinc-400 text-xs uppercase tracking-wider min-w-32">
               Items Mfg
             </TableHead>
             <TableHead className="text-zinc-400 text-xs uppercase tracking-wider">
-              Target Date
+              Lots
+            </TableHead>
+            <TableHead className="text-zinc-400 text-xs uppercase tracking-wider">
+              <button onClick={() => toggleSort("unresolved")} className="flex items-center gap-1 hover:text-zinc-200 transition-colors">
+                Unresolved <SortIcon col="unresolved" sortKey={sortKey} sortDir={sortDir} />
+              </button>
+            </TableHead>
+            <TableHead className="text-zinc-400 text-xs uppercase tracking-wider">
+              <button onClick={() => toggleSort("target_date")} className="flex items-center gap-1 hover:text-zinc-200 transition-colors">
+                Target Date <SortIcon col="target_date" sortKey={sortKey} sortDir={sortDir} />
+              </button>
             </TableHead>
             <TableHead className="w-16" />
           </TableRow>
         </TableHeader>
         <TableBody>
-          {orders.map((order, index) => {
+          {sorted.map((order, index) => {
             const status = PRODUCTION_STATUS_CONFIG[order.status];
             const pct = getProgress(order);
 
@@ -265,16 +357,43 @@ export function OrderTable({ orders, isLoading }: OrderTableProps) {
                   </Badge>
                 </TableCell>
                 <TableCell>
+                  {(() => {
+                    const clients = [...new Set(
+                      (order.lot_imports ?? [])
+                        .map((l) => l.clients?.name)
+                        .filter(Boolean) as string[]
+                    )];
+                    return clients.length > 0
+                      ? <span className="text-sm text-zinc-300">{clients.join(", ")}</span>
+                      : <span className="text-zinc-600 text-xs">—</span>;
+                  })()}
+                </TableCell>
+                <TableCell>
                   <div className="flex items-center gap-2">
                     <Progress value={pct} className="h-3 bg-zinc-700 flex-1" />
                     <span className="text-xs text-zinc-500 w-14">{pct.toFixed(2)}%</span>
                   </div>
                 </TableCell>
                 <TableCell>
-                  <FulfilledCell order={order} />
+                  <FulfilledCell order={order} onPctChange={handleFulfillmentPct} />
                 </TableCell>
                 <TableCell>
                   <ItemsCountCell order={order} />
+                </TableCell>
+                <TableCell>
+                  {order.lot_imports && order.lot_imports.length > 0 ? (
+                    <span className="text-xs text-zinc-300 font-mono">
+                      {order.lot_imports
+                        .map((l) => l.lot_number.replace(/^LOT/i, ""))
+                        .sort((a, b) => Number(a) - Number(b))
+                        .join(", ")}
+                    </span>
+                  ) : (
+                    <span className="text-zinc-600 text-xs">—</span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <IssueCountCell orderId={order.id} onCountChange={handleIssueCount} />
                 </TableCell>
                 <TableCell className="text-sm text-zinc-400">
                   {order.target_date ? formatDate(order.target_date) : "—"}

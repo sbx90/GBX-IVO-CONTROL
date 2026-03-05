@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { ArrowLeft, Trash2, Wand2, CheckCircle2, AlertTriangle, Pencil, ChevronRight, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +15,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { StepPipeline } from "@/components/production/step-pipeline";
-import { useProductionOrder, useDeleteOrder, useUpdateOrder } from "@/hooks/use-production";
+import { useProductionOrder, useDeleteOrder, useUpdateOrder, useOrderInventoryCheck } from "@/hooks/use-production";
+import { InventoryCheckCard } from "@/components/production/inventory-check-card";
 import { useKitDefinitions } from "@/hooks/use-kit-definitions";
 import { useBulkCreateManufacturedItems, useLotImportsByOrder, useOrderPendingIssues, useResolveIssues } from "@/hooks/use-manufactured";
 import type { LotStatus, ProductionStatus } from "@/lib/types/database";
@@ -64,6 +65,31 @@ export default function OrderDetailPage() {
     }
     return total || order?.quantity || 0;
   })();
+
+  // Inventory verification: compute expected parts from kit expansion
+  const expectedParts = useMemo(() => {
+    if (!order?.items || !kitDefinitions) return null;
+    const partMap = new Map<string, number>();
+    for (const item of order.items) {
+      if (item.type === "KIT") {
+        const kitDef = kitDefinitions.find(d => d.name === item.reference);
+        if (!kitDef) continue;
+        for (const comp of kitDef.components) {
+          if (!comp.reference || comp.reference === "undefined") continue;
+          const qty = (comp.quantity ?? 1) * item.quantity;
+          partMap.set(comp.reference, (partMap.get(comp.reference) ?? 0) + qty);
+        }
+      } else if (item.reference) {
+        partMap.set(item.reference, (partMap.get(item.reference) ?? 0) + item.quantity);
+      }
+    }
+    return Array.from(partMap.entries()).map(([partNumber, expectedQty]) => ({ partNumber, expectedQty }));
+  }, [order?.items, kitDefinitions]);
+
+  const { data: inventoryCheck, isLoading: inventoryCheckLoading } = useOrderInventoryCheck(
+    id, expectedParts,
+  );
+
   const [mfgCode, setMfgCode] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deletePw, setDeletePw] = useState("");
@@ -444,6 +470,9 @@ export default function OrderDetailPage() {
               </Card>
             );
           })()}
+
+          {/* Inventory Verification Card */}
+          <InventoryCheckCard results={inventoryCheck} isLoading={inventoryCheckLoading} />
 
           {/* LOT Inventory Card */}
           {(() => {

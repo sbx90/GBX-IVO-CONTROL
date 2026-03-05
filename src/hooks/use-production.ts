@@ -22,7 +22,7 @@ export function useProductionOrders(filters?: ProductionFilters) {
       const supabase = getSupabase();
       let query = supabase
         .from("production_orders")
-        .select("*, production_steps(*), lot_imports(item_count)")
+        .select("*, production_steps(*), lot_imports(item_count, lot_number, clients(name))")
         .order("created_at", { ascending: false });
 
       if (filters?.status && filters.status !== "ALL") {
@@ -315,7 +315,6 @@ export function useOrderFulfillmentDetail(orderId: string, enabled: boolean) {
           .select("part_number, serial_number, lot_number")
           .in("lot_number", lotNumbers)
           .not("status", "in", '("BAD","MANUAL","EXTRA")')
-          .or("issue.is.null,issue.eq.OK")
           .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
         if (itemsErr) throw itemsErr;
         allItems.push(...(data ?? []));
@@ -342,6 +341,114 @@ export function useOrderFulfillmentDetail(orderId: string, enabled: boolean) {
         }
       }
       return byPart;
+    },
+  });
+}
+
+export function useOrderIssueCount(orderId: string) {
+  return useQuery<number>({
+    queryKey: ["order_issue_count", orderId],
+    enabled: !!orderId,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const supabase = getSupabase();
+
+      const { data: lots } = await supabase
+        .from("lot_imports")
+        .select("lot_number")
+        .eq("production_order_id", orderId);
+
+      const lotNumbers = (lots ?? []).map((l: { lot_number: string }) => l.lot_number).filter(Boolean);
+      if (lotNumbers.length === 0) return 0;
+
+      const { count, error } = await supabase
+        .from("manufactured_items")
+        .select("id", { count: "exact", head: true })
+        .in("lot_number", lotNumbers)
+        .not("issue", "is", null);
+
+      if (error) throw error;
+      return count ?? 0;
+    },
+  });
+}
+
+// ─── Inventory Verification ──────────────────────────────────
+
+export interface InventoryCheckPart {
+  partNumber: string;
+  expectedQty: number;
+}
+
+export interface InventoryCheckResult {
+  partNumber: string;
+  expectedQty: number;
+  foundCount: number;
+  missing: number; // max(0, expectedQty - foundCount)
+  extra: number;   // max(0, foundCount - expectedQty)
+}
+
+export function useOrderInventoryCheck(
+  orderId: string,
+  expectedParts: InventoryCheckPart[] | null,
+) {
+  return useQuery<InventoryCheckResult[]>({
+    queryKey: ["order_inventory_check", orderId],
+    enabled: !!orderId && !!expectedParts && expectedParts.length > 0,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const supabase = getSupabase();
+      const parts = expectedParts!;
+
+      // 1. Get lot_numbers attached to this production order
+      const { data: lots, error: lotsErr } = await supabase
+        .from("lot_imports")
+        .select("lot_number")
+        .eq("production_order_id", orderId);
+      if (lotsErr) throw lotsErr;
+      const lotNumbers = (lots ?? []).map((l: { lot_number: string }) => l.lot_number).filter(Boolean);
+
+      // 2. Count items per part_number from those LOTs (paginated)
+      const countByPart = new Map<string, number>();
+      if (lotNumbers.length > 0) {
+        const PAGE_SIZE = 1000;
+        let page = 0;
+        while (true) {
+          const { data, error } = await supabase
+            .from("manufactured_items")
+            .select("part_number")
+            .in("lot_number", lotNumbers)
+            .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+          if (error) throw error;
+          for (const item of data ?? []) {
+            countByPart.set(item.part_number, (countByPart.get(item.part_number) ?? 0) + 1);
+          }
+          if ((data?.length ?? 0) < PAGE_SIZE) break;
+          page++;
+        }
+      }
+
+      // 3. Build results for each expected part
+      const expectedSet = new Set(parts.map(p => p.partNumber));
+      const results: InventoryCheckResult[] = parts.map(p => {
+        const foundCount = countByPart.get(p.partNumber) ?? 0;
+        return {
+          partNumber: p.partNumber,
+          expectedQty: p.expectedQty,
+          foundCount,
+          missing: Math.max(0, p.expectedQty - foundCount),
+          extra: Math.max(0, foundCount - p.expectedQty),
+        };
+      });
+
+      // 4. Add parts found in LOTs that are not in the expected list
+      for (const [pn, count] of countByPart.entries()) {
+        if (!expectedSet.has(pn)) {
+          results.push({ partNumber: pn, expectedQty: 0, foundCount: count, missing: 0, extra: count });
+        }
+      }
+
+      return results;
     },
   });
 }

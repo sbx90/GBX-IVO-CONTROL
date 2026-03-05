@@ -17,11 +17,8 @@ import {
   PRIORITY_CONFIG,
   TICKET_STATUS_CONFIG,
   ISSUE_CATEGORY_CONFIG,
-  COMPONENT_CONFIG,
-  MAINBOARD_SECTION_CONFIG,
 } from "@/lib/constants";
 import { formatDate, formatRelativeDate } from "@/lib/utils";
-import type { MainboardSectionRecord, KitComponent } from "@/lib/types/database";
 
 export default function TicketDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -57,8 +54,6 @@ export default function TicketDetailPage() {
   const allAttachments = ticket.ticket_attachments ?? [];
   // Only ticket-level attachments (not tied to comments)
   const ticketAttachments = allAttachments.filter((a) => !a.comment_id);
-  const component = ticket.kit_components as KitComponent | null;
-  const section = ticket.mainboard_sections as MainboardSectionRecord | null;
 
   return (
     <div className="space-y-5">
@@ -70,7 +65,7 @@ export default function TicketDetailPage() {
           {/* Known issues suggestion */}
           <KnownIssuesSuggest
             issueCategory={ticket.issue_category}
-            boardSection={section?.section_name}
+            boardSection={undefined}
           />
 
           {/* Description */}
@@ -165,33 +160,41 @@ export default function TicketDetailPage() {
                   {ISSUE_CATEGORY_CONFIG[ticket.issue_category].label}
                 </span>
               </div>
-              {ticket.kits && (
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-500">Kit</span>
-                  <Link
-                    href={`/stock/${ticket.kits.id}`}
-                    className="font-mono text-xs text-[#16a34a] hover:text-[#9d8fff]"
-                  >
-                    {ticket.kits.serial_number}
-                  </Link>
-                </div>
-              )}
-              {component && (
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-500">Component</span>
-                  <span className="text-zinc-300 text-xs">
-                    {COMPONENT_CONFIG[component.component_type].label}
-                  </span>
-                </div>
-              )}
-              {section && (
-                <div className="flex justify-between items-center">
-                  <span className="text-zinc-500">Board Section</span>
-                  <span className="text-zinc-300 text-xs">
-                    {MAINBOARD_SECTION_CONFIG[section.section_name].shortLabel}
-                  </span>
-                </div>
-              )}
+              {(() => {
+                const linkedItems = ticket.ticket_manufactured_items ?? [];
+                if (linkedItems.length > 0) {
+                  return (
+                    <div className="space-y-1">
+                      <span className="text-zinc-500 text-sm">{linkedItems.length === 1 ? "Product" : "Products"}</span>
+                      {linkedItems.map(li => li.manufactured_items && (
+                        <div key={li.id} className="font-mono text-xs text-zinc-300 bg-zinc-800 rounded px-2 py-1">
+                          {li.manufactured_items.part_number}
+                          <span className="text-zinc-500 ml-1">· {li.manufactured_items.serial_number}</span>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                }
+                if (ticket.manufactured_items) {
+                  return (
+                    <div className="flex justify-between items-center">
+                      <span className="text-zinc-500">Product</span>
+                      <span className="font-mono text-xs text-zinc-300">
+                        {ticket.manufactured_items.part_number} · {ticket.manufactured_items.serial_number}
+                      </span>
+                    </div>
+                  );
+                }
+                if (ticket.kits) {
+                  return (
+                    <div className="flex justify-between items-center">
+                      <span className="text-zinc-500">Kit</span>
+                      <span className="font-mono text-xs text-zinc-300">{ticket.kits.serial_number}</span>
+                    </div>
+                  );
+                }
+                return null;
+              })()}
               <Separator className="bg-zinc-800" />
               <div className="flex justify-between items-center">
                 <span className="text-zinc-500">Created</span>

@@ -38,7 +38,6 @@ const navItems: NavItem[] = [
   { href: "/lots", icon: Archive, label: "Lots" },
   { href: "/manufactured", icon: CheckSquare, label: "Manufactured" },
   { href: "/stock", icon: Package, label: "Stock" },
-  { href: "/kits", icon: Layers, label: "Kits" },
   { href: "/tickets", icon: TicketIcon, label: "Tickets", badge: "tickets" },
   { href: "/tasks", icon: ListTodo, label: "Tasks", badge: "tasks" },
   { href: "/notes", icon: StickyNote, label: "Notes" },

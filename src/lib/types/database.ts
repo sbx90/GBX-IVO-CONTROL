@@ -141,6 +141,12 @@ export interface MainboardSectionRecord {
   updated_at: string;
 }
 
+export interface TicketManufacturedItem {
+  id: string;
+  manufactured_item_id: string;
+  manufactured_items: Pick<ManufacturedItem, 'id' | 'part_number' | 'serial_number'> | null;
+}
+
 export interface Ticket {
   id: string;
   ticket_number: number;
@@ -167,6 +173,7 @@ export interface Ticket {
   ticket_attachments?: TicketAttachment[];
   clients?: Pick<Client, 'id' | 'name'> | null;
   manufactured_items?: Pick<ManufacturedItem, 'id' | 'part_number' | 'serial_number'> | null;
+  ticket_manufactured_items?: TicketManufacturedItem[];
 }
 
 export interface TicketComment {
@@ -205,7 +212,7 @@ export interface ProductionOrder {
   updated_at: string;
   // Joined fields
   production_steps?: ProductionStep[];
-  lot_imports?: { item_count: number }[];
+  lot_imports?: { item_count: number; lot_number: string; clients?: { name: string } | null }[];
 }
 
 export interface ProductionStep {
@@ -290,6 +297,7 @@ export interface CreateKitInput {
 export interface CreateTicketInput {
   kit_id?: string;
   manufactured_item_id?: string;
+  manufactured_item_ids?: string[];
   client_id?: string;
   component_id?: string;
   mainboard_section_id?: string;
@@ -379,9 +387,19 @@ export interface AssembledKitFilters {
   search?: string;
 }
 
-export type ManufacturedItemStatus = 'OK' | 'IN_PROCESS' | 'IN_TRANSIT' | 'AT_CLIENT' | 'RETURNED' | 'BAD' | 'MANUAL' | 'EXTRA';
+export type ManufacturedItemStatus = 'OK' | 'IN_PROCESS' | 'IN_TRANSIT' | 'AT_CLIENT' | 'RETURNED' | 'BAD' | 'MANUAL' | 'EXTRA' | 'OWE';
 
-export type ManufacturedItemLocation = 'SUPPLIER' | 'GBX' | 'CLIENT';
+export type ManufacturedItemLocation =
+  | 'FACTORY'
+  | 'TRANSIT'
+  | 'GBX_WAREHOUSE_CHINA'
+  | 'GBX_WAREHOUSE'
+  | 'FREIGHT_FORWARDER'
+  | 'CLIENT_WAREHOUSE'
+  // legacy values
+  | 'SUPPLIER'
+  | 'GBX'
+  | 'CLIENT';
 
 export interface ManufacturedItem {
   id: string;
@@ -394,6 +412,10 @@ export interface ManufacturedItem {
   status: ManufacturedItemStatus;
   location: ManufacturedItemLocation | null;
   issue: string | null;
+  comment: string | null;
+  image_url: string | null;
+  stock_verified_at: string | null;
+  stock_verified_by: string | null;
   created_at: string;
   updated_at: string;
   // Joined
@@ -411,6 +433,8 @@ export interface CreateManufacturedItemInput {
   status?: ManufacturedItemStatus;
   location?: ManufacturedItemLocation;
   issue?: string | null;
+  comment?: string | null;
+  image_url?: string | null;
 }
 
 export interface IssueDefinition {
@@ -452,7 +476,10 @@ export interface ProductCatalogItem {
   created_at: string;
 }
 
-export type LotStatus = 'DELIVERED' | 'IN_TRANSIT' | 'AT_WAREHOUSE' | 'AT_FACTORY' | 'DELAYED';
+export type LotStatus =
+  | 'PRODUCTION' | 'QA' | 'PACKED' | 'TRANSIT' | 'GBX_WAREHOUSE' | 'FREIGHT_FORWARDER' | 'CLIENT_WAREHOUSE'
+  // legacy values
+  | 'DELIVERED' | 'IN_TRANSIT' | 'AT_WAREHOUSE' | 'AT_FACTORY' | 'DELAYED';
 
 export interface LotImport {
   id: string;
@@ -478,7 +505,7 @@ export interface CreateLotImportInput {
   xlsx_path?: string;
   item_count: number;
   client_id?: string;
-  production_order_id?: string;
+  production_order_id?: string | null;
   lot_status?: LotStatus;
   pl_approved?: boolean;
   serial_approved?: boolean;

@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNotes, useCreateNote, useUpdateNote, useDeleteNote } from "@/hooks/use-notes";
+import { MentionTextarea, MentionText } from "@/components/ui/mention-textarea";
 import type { Note, NoteColor } from "@/lib/types/database";
 
 const COLORS: { value: NoteColor; bg: string; border: string; dot: string }[] = [
@@ -83,10 +84,10 @@ function NoteCard({ note }: { note: Note }) {
 
       {/* Content */}
       {editing ? (
-        <textarea
+        <MentionTextarea
           ref={textareaRef}
           value={draft}
-          onChange={e => setDraft(e.target.value)}
+          onChange={setDraft}
           onBlur={handleBlur}
           onKeyDown={e => { if (e.key === "Escape") { setDraft(note.content); setEditing(false); } }}
           className="w-full bg-transparent text-zinc-100 text-sm resize-none outline-none min-h-[80px] leading-relaxed"
@@ -97,7 +98,10 @@ function NoteCard({ note }: { note: Note }) {
           onClick={() => setEditing(true)}
           className="text-zinc-200 text-sm leading-relaxed whitespace-pre-wrap cursor-text flex-1 min-h-[60px]"
         >
-          {note.content || <span className="text-zinc-600 italic">Click to edit…</span>}
+          {note.content
+            ? <MentionText text={note.content} />
+            : <span className="text-zinc-600 italic">Click to edit…</span>
+          }
         </p>
       )}
 
