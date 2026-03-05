@@ -744,6 +744,7 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
   const { data: catalog = [] } = useProductCatalog();
   const allPartNumbers = catalog.map((c) => c.part_number);
   const { data: orders = [] } = useProductionOrders();
+  const { data: clients = [] } = useClients();
   const bulkCreate = useBulkCreateManufacturedItems();
   const updateLotImport = useUpdateLotImport();
   const subtractLotItems = useSubtractLotItems();
@@ -757,9 +758,11 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
   const [newPartCount, setNewPartCount] = useState("");
   const [newPartStartSerial, setNewPartStartSerial] = useState("1");
   const [selectedOrderId, setSelectedOrderId] = useState<string>(lot?.production_order_id ?? "none");
+  const [selectedClientId, setSelectedClientId] = useState<string>(lot?.client_id ?? "none");
 
   useEffect(() => {
     setSelectedOrderId(lot?.production_order_id ?? "none");
+    setSelectedClientId(lot?.client_id ?? "none");
   }, [lot?.id]);
 
   function openRow(part: string, mode: "add" | "subtract") {
@@ -1039,6 +1042,7 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
               };
               if (v !== "none" && selectedOrder?.client_id) {
                 updates.client_id = selectedOrder.client_id;
+                setSelectedClientId(selectedOrder.client_id);
               }
               updateLotImport.mutate({ id: lot.id, updates });
             }}
@@ -1053,6 +1057,33 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
               {orders.map((o) => (
                 <SelectItem key={o.id} value={o.id} className="text-xs text-zinc-200 focus:bg-zinc-700 font-mono">
                   {o.order_number}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {/* ── Client assignment ── */}
+        <div className="border-t border-zinc-800 pt-3 mt-1 space-y-1.5">
+          <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Client</label>
+          <Select
+            value={selectedClientId}
+            onValueChange={(v) => {
+              if (!lot) return;
+              setSelectedClientId(v);
+              updateLotImport.mutate({ id: lot.id, updates: { client_id: v === "none" ? null : v } });
+            }}
+          >
+            <SelectTrigger className="h-8 text-xs bg-zinc-800 border-zinc-700 text-zinc-100">
+              <SelectValue placeholder="No client assigned" />
+            </SelectTrigger>
+            <SelectContent className="bg-zinc-800 border-zinc-700">
+              <SelectItem value="none" className="text-xs text-zinc-400 focus:bg-zinc-700">
+                No client assigned
+              </SelectItem>
+              {clients.map((c) => (
+                <SelectItem key={c.id} value={c.id} className="text-xs text-zinc-200 focus:bg-zinc-700">
+                  {c.name}
                 </SelectItem>
               ))}
             </SelectContent>
