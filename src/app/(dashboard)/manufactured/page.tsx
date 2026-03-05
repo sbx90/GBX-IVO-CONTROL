@@ -73,12 +73,13 @@ const STATUS_CONFIG: Record<ManufacturedItemStatus, { label: string; className: 
 const ALL_STATUSES: ManufacturedItemStatus[] = ["OK", "IN_PROCESS", "IN_TRANSIT", "AT_CLIENT", "RETURNED", "MANUAL", "EXTRA"];
 type FilterStatus = ManufacturedItemStatus | "ALL" | "ISSUES";
 
-const ALL_LOCATIONS: ManufacturedItemLocation[] = ["FACTORY", "TRANSIT", "GBX_WAREHOUSE_CHINA", "FREIGHT_FORWARDER", "CLIENT_WAREHOUSE", "SUPPLIER", "GBX", "CLIENT"];
+const ALL_LOCATIONS: ManufacturedItemLocation[] = ["FACTORY", "TRANSIT", "GBX_WAREHOUSE_CHINA", "GBX_WAREHOUSE", "FREIGHT_FORWARDER", "CLIENT_WAREHOUSE", "SUPPLIER", "GBX", "CLIENT"];
 
 const LOCATION_CONFIG: Record<ManufacturedItemLocation, { label: string; className: string }> = {
   FACTORY:             { label: "Factory",           className: "bg-amber-500/15 text-amber-400 border-0" },
   TRANSIT:             { label: "Transit",           className: "bg-sky-500/15 text-sky-400 border-0" },
   GBX_WAREHOUSE_CHINA: { label: "GBX WH China",      className: "bg-violet-500/15 text-violet-400 border-0" },
+  GBX_WAREHOUSE:       { label: "GBX Warehouse",     className: "bg-indigo-500/15 text-indigo-400 border-0" },
   FREIGHT_FORWARDER:   { label: "Freight-Forwarder", className: "bg-cyan-500/15 text-cyan-400 border-0" },
   CLIENT_WAREHOUSE:    { label: "Client Warehouse",  className: "bg-green-500/15 text-green-400 border-0" },
   SUPPLIER:            { label: "Supplier",          className: "bg-zinc-700 text-zinc-400 border-0" },
