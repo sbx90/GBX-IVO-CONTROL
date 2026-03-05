@@ -67,6 +67,7 @@ const STATUS_CONFIG: Record<ManufacturedItemStatus, { label: string; className: 
   BAD:        { label: "Bad",         className: "bg-red-500/15 text-red-400 border-0" },
   MANUAL:     { label: "Manual",      className: "bg-purple-500/15 text-purple-400 border-0" },
   EXTRA:      { label: "Extra Unit",  className: "bg-orange-500/15 text-orange-400 border-0" },
+  OWE:        { label: "Owed",        className: "bg-rose-500/15 text-rose-400 border-0" },
 };
 
 const ALL_STATUSES: ManufacturedItemStatus[] = ["OK", "IN_PROCESS", "IN_TRANSIT", "AT_CLIENT", "RETURNED", "MANUAL", "EXTRA"];
