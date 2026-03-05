@@ -1033,7 +1033,14 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
             onValueChange={(v) => {
               if (!lot) return;
               setSelectedOrderId(v);
-              updateLotImport.mutate({ id: lot.id, updates: { production_order_id: v === "none" ? null : v } });
+              const selectedOrder = orders.find((o) => o.id === v);
+              const updates: Parameters<typeof updateLotImport.mutate>[0]["updates"] = {
+                production_order_id: v === "none" ? null : v,
+              };
+              if (v !== "none" && selectedOrder?.client_id) {
+                updates.client_id = selectedOrder.client_id;
+              }
+              updateLotImport.mutate({ id: lot.id, updates });
             }}
           >
             <SelectTrigger className="h-8 text-xs bg-zinc-800 border-zinc-700 text-zinc-100">

@@ -22,7 +22,7 @@ export function useProductionOrders(filters?: ProductionFilters) {
       const supabase = getSupabase();
       let query = supabase
         .from("production_orders")
-        .select("*, production_steps(*), lot_imports(item_count, lot_number, clients(name))")
+        .select("*, production_steps(*), lot_imports(item_count, lot_number, clients(name)), clients(id, name)")
         .order("created_at", { ascending: false });
 
       if (filters?.status && filters.status !== "ALL") {
@@ -50,7 +50,7 @@ export function useProductionOrder(id: string) {
       const supabase = getSupabase();
       const { data, error } = await supabase
         .from("production_orders")
-        .select("*, production_steps(*)")
+        .select("*, production_steps(*), clients(id, name)")
         .eq("id", id)
         .single();
 
@@ -108,7 +108,7 @@ export function useUpdateOrder() {
     }: {
       id: string;
       updates: Partial<
-        Pick<ProductionOrder, "status" | "notes" | "target_date" | "current_step" | "manufacture_code" | "items" | "quantity">
+        Pick<ProductionOrder, "status" | "notes" | "target_date" | "current_step" | "manufacture_code" | "items" | "quantity" | "client_id">
       >;
     }) => {
       const supabase = getSupabase();

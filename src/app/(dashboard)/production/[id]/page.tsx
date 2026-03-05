@@ -16,6 +16,7 @@ import { Separator } from "@/components/ui/separator";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { StepPipeline } from "@/components/production/step-pipeline";
 import { useProductionOrder, useDeleteOrder, useUpdateOrder, useOrderInventoryCheck } from "@/hooks/use-production";
+import { useClients } from "@/hooks/use-clients";
 import { InventoryCheckCard } from "@/components/production/inventory-check-card";
 import { useKitDefinitions } from "@/hooks/use-kit-definitions";
 import { useBulkCreateManufacturedItems, useLotImportsByOrder, useOrderPendingIssues, useResolveIssues } from "@/hooks/use-manufactured";
@@ -31,6 +32,7 @@ export default function OrderDetailPage() {
   const deleteOrder = useDeleteOrder();
   const updateOrder = useUpdateOrder();
   const bulkCreate = useBulkCreateManufacturedItems();
+  const { data: clients = [] } = useClients();
   const { data: orderLots = [] } = useLotImportsByOrder(id);
   const { data: pendingIssues = [] } = useOrderPendingIssues(id);
   const resolveIssues = useResolveIssues();
@@ -100,7 +102,7 @@ export default function OrderDetailPage() {
   const [editUnlocked, setEditUnlocked] = useState(false);
   const [editPw, setEditPw] = useState("");
   const [editPwError, setEditPwError] = useState(false);
-  const [editForm, setEditForm] = useState<{ status: string; target_date: string; notes: string; itemQtys: number[] }>({ status: "", target_date: "", notes: "", itemQtys: [] });
+  const [editForm, setEditForm] = useState<{ status: string; client_id: string; target_date: string; notes: string; itemQtys: number[] }>({ status: "", client_id: "", target_date: "", notes: "", itemQtys: [] });
 
   useEffect(() => {
     setMfgCode(order?.manufacture_code ?? "");
@@ -110,6 +112,7 @@ export default function OrderDetailPage() {
     if (!order) return;
     setEditForm({
       status: order.status,
+      client_id: order.client_id ?? "none",
       target_date: order.target_date ?? "",
       notes: order.notes ?? "",
       itemQtys: (order.items ?? []).map((i) => i.quantity),
@@ -131,6 +134,7 @@ export default function OrderDetailPage() {
       id: order.id,
       updates: {
         status: editForm.status as ProductionStatus,
+        client_id: editForm.client_id === "none" ? null : editForm.client_id || null,
         target_date: editForm.target_date || null,
         notes: editForm.notes || null,
         items: updatedItems,
@@ -339,6 +343,10 @@ export default function OrderDetailPage() {
                   onKeyDown={(e) => e.key === "Enter" && saveMfgCode()}
                   className="bg-transparent border-b border-zinc-700 text-zinc-200 text-sm font-mono w-20 text-right focus:outline-none focus:border-zinc-500 placeholder:text-zinc-600"
                 />
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-zinc-500">Client</span>
+                <span className="text-zinc-300 text-sm font-medium">{order.clients?.name ?? "—"}</span>
               </div>
               <Separator className="bg-zinc-800" />
               <div className="flex justify-between">
@@ -653,6 +661,24 @@ export default function OrderDetailPage() {
                       Complete{pendingIssues.length > 0 ? " (resolve issues first)" : ""}
                     </SelectItem>
                     <SelectItem value="CANCELLED">Cancelled</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs text-zinc-400 uppercase tracking-wider">Client</label>
+                <Select
+                  value={editForm.client_id}
+                  onValueChange={(v) => setEditForm((f) => ({ ...f, client_id: v }))}
+                >
+                  <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-100">
+                    <SelectValue placeholder="No client" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-800 border-zinc-700">
+                    <SelectItem value="none" className="text-zinc-400">No client</SelectItem>
+                    {clients.map((c) => (
+                      <SelectItem key={c.id} value={c.id} className="text-zinc-200 focus:bg-zinc-700">{c.name}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>

@@ -20,6 +20,8 @@ export function useLiveFeed() {
     queryKey: ["live_feed"],
     staleTime: 0,
     refetchInterval: 10_000,
+    retry: 2,
+    retryDelay: 1000,
     queryFn: async () => {
       const supabase = createClient();
       const [notesRes, tasksRes, commentsRes] = await Promise.all([

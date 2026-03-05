@@ -205,6 +205,7 @@ export interface ProductionOrder {
   current_step: number;
   items: ProductionOrderItem[] | null;
   manufacture_code: string | null;
+  client_id: string | null;
   target_date: string | null;
   notes: string | null;
   created_by: string | null;
@@ -213,6 +214,7 @@ export interface ProductionOrder {
   // Joined fields
   production_steps?: ProductionStep[];
   lot_imports?: { item_count: number; lot_number: string; clients?: { name: string } | null }[];
+  clients?: Pick<Client, 'id' | 'name'> | null;
 }
 
 export interface ProductionStep {
@@ -340,6 +342,7 @@ export interface CreateOrderInput {
   quantity: number; // derived: sum of item quantities
   items: ProductionOrderItem[];
   manufacture_code?: string;
+  client_id?: string;
   target_date?: string;
   notes?: string;
 }

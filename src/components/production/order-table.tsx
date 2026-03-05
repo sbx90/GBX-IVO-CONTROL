@@ -357,16 +357,19 @@ export function OrderTable({ orders, isLoading }: OrderTableProps) {
                   </Badge>
                 </TableCell>
                 <TableCell>
-                  {(() => {
-                    const clients = [...new Set(
-                      (order.lot_imports ?? [])
-                        .map((l) => l.clients?.name)
-                        .filter(Boolean) as string[]
-                    )];
-                    return clients.length > 0
-                      ? <span className="text-sm text-zinc-300">{clients.join(", ")}</span>
-                      : <span className="text-zinc-600 text-xs">—</span>;
-                  })()}
+                  {order.clients?.name
+                    ? <span className="text-sm text-zinc-300">{order.clients.name}</span>
+                    : (() => {
+                        const lotClients = [...new Set(
+                          (order.lot_imports ?? [])
+                            .map((l) => l.clients?.name)
+                            .filter(Boolean) as string[]
+                        )];
+                        return lotClients.length > 0
+                          ? <span className="text-sm text-zinc-400">{lotClients.join(", ")}</span>
+                          : <span className="text-zinc-600 text-xs">—</span>;
+                      })()
+                  }
                 </TableCell>
                 <TableCell>
                   <div className="flex items-center gap-2">

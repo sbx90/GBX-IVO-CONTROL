@@ -92,7 +92,7 @@ export function DeployButton() {
   const isActive = state === "deploying" || state === "success" || state === "error";
 
   return (
-    <div className="px-3 pb-1 space-y-1">
+    <div className="space-y-1">
       <button
         onClick={handleDeploy}
         disabled={state === "deploying"}
