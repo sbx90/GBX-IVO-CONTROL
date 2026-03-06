@@ -1071,7 +1071,7 @@ function EditLotDialog({ lot, onClose }: { lot: LotImport | null; onClose: () =>
             onValueChange={(v) => {
               if (!lot) return;
               setSelectedClientId(v);
-              updateLotImport.mutate({ id: lot.id, updates: { client_id: v === "none" ? null : v } });
+              updateLotImport.mutate({ id: lot.id, updates: { client_id: v === "none" ? undefined : v } });
             }}
           >
             <SelectTrigger className="h-8 text-xs bg-zinc-800 border-zinc-700 text-zinc-100">
