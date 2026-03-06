@@ -405,9 +405,18 @@ export default function StockPage() {
     return user?.email ?? "unknown";
   }
 
-  async function handleCameraScan(serial: string) {
+  function parseBarcodeSerial(raw: string): string {
+    // Handle format: "GBXIVO-IMB_CAM-A1 S/N:25090451"
+    const snMatch = raw.match(/S\/N[:\s]+(\S+)/i);
+    if (snMatch) return snMatch[1].trim();
+    // Fallback: use raw value as-is
+    return raw.trim();
+  }
+
+  async function handleCameraScan(raw: string) {
     if (!gbxClientId) return;
     setCameraOpen(false);
+    const serial = parseBarcodeSerial(raw);
     const verifiedBy = await getVerifiedBy();
     const result = await verifyItems.mutateAsync({ serials: [serial], verifiedBy, clientId: gbxClientId });
     if (result.matched > 0) {
@@ -423,6 +432,8 @@ export default function StockPage() {
       } else {
         toast.error(`Serial not found: ${serial}`);
       }
+    } else {
+      toast.error(`Serial not found: ${serial}`);
     }
   }
 
