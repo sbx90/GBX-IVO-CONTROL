@@ -1,12 +1,16 @@
 "use client";
 
 import React, { useState, useMemo, useRef, useEffect } from "react";
+import dynamic from "next/dynamic";
+const CameraScanner = dynamic(
+  () => import("@/components/stock/camera-scanner").then(m => m.CameraScanner),
+  { ssr: false }
+);
 import {
   Search, ChevronLeft, ChevronRight, CheckCircle2, ScanLine, X,
   ArrowUp, ArrowDown, ArrowUpDown, Ticket as TicketIcon, Camera, ImagePlus, Pencil,
   AlertCircle, ArrowLeftRight,
 } from "lucide-react";
-import { CameraScanner } from "@/components/stock/camera-scanner";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
