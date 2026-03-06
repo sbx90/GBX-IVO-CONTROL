@@ -6,6 +6,7 @@ import {
   ArrowUp, ArrowDown, ArrowUpDown, Ticket as TicketIcon, Camera, ImagePlus, Pencil,
   AlertCircle, ArrowLeftRight,
 } from "lucide-react";
+import { CameraScanner } from "@/components/stock/camera-scanner";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
@@ -202,6 +203,7 @@ export default function StockPage() {
   const [scanInput, setScanInput] = useState("");
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkText, setBulkText] = useState("");
+  const [cameraOpen, setCameraOpen] = useState(false);
   const scanRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -399,6 +401,27 @@ export default function StockPage() {
     return user?.email ?? "unknown";
   }
 
+  async function handleCameraScan(serial: string) {
+    if (!gbxClientId) return;
+    setCameraOpen(false);
+    const verifiedBy = await getVerifiedBy();
+    const result = await verifyItems.mutateAsync({ serials: [serial], verifiedBy, clientId: gbxClientId });
+    if (result.matched > 0) {
+      const item = result.matchedItems[0];
+      clearIssuePrompt();
+      setIssuePromptValue(issueDefinitions.find(d => d.name === item.issue)?.id ?? "none");
+      setIssuePrompt(item);
+    } else if (result.notFound.length > 0) {
+      const found = await lookupItemBySerial.mutateAsync({ serial, verifiedBy });
+      if (found && found.client_id && found.client_id !== gbxClientId) {
+        const clientName = clients.find(c => c.id === found.client_id)?.name ?? "Unknown";
+        setOwePrompt({ id: found.id, serial_number: found.serial_number, part_number: found.part_number, client_id: found.client_id, clientName });
+      } else {
+        toast.error(`Serial not found: ${serial}`);
+      }
+    }
+  }
+
   async function handleSingleScan(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key !== "Enter" || !gbxClientId) return;
     const serial = scanInput.trim();
@@ -548,7 +571,21 @@ export default function StockPage() {
                   <X className="h-4 w-4" />
                 </button>
               )}
+              <button
+                onClick={() => setCameraOpen(true)}
+                disabled={!gbxClientId}
+                title="Scan with camera"
+                className="flex items-center justify-center h-9 w-9 rounded border border-zinc-700 bg-zinc-900 text-zinc-400 hover:text-zinc-100 hover:border-zinc-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+              >
+                <Camera className="h-4 w-4" />
+              </button>
             </div>
+            {cameraOpen && (
+              <CameraScanner
+                onScan={handleCameraScan}
+                onClose={() => setCameraOpen(false)}
+              />
+            )}
             {/* Issue prompt after verify */}
             {issuePrompt && (
               <div className="rounded-lg border border-green-500/30 bg-green-500/5 px-3 py-3 space-y-2.5">
